@@ -1193,7 +1193,8 @@ export async function hostRenamed(server: string, connectorId: string, name: str
   if (!hostsHere) return;
   const all = localHosts();
   await all.load();
-  untracked(() => all.withConnector(server, connectorId))?.change({ name });
+  const current = untracked(() => all.forServer(server).filter(host => (host.running()?.connectorId ?? host.config().connectorIds?.at(-1)) === connectorId));
+  if (current.length === 1) current[0]!.change({ name });
 }
 
 export function thisComputerHostIds(server?: string): string[] {

@@ -1,10 +1,11 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../../packages/shared/src/app-host-protocol";
 import {
-  appCliFolder, checkCommandUpdates, installCommand, localHosts, nativeEnvironment, resumeThisComputer, setCommandUpdate, setHostLauncher, setInstaller, setWslLister, thisComputerHostIds,
+  appCliFolder, checkCommandUpdates, hostRenamed, installCommand, localHosts, nativeEnvironment, resumeThisComputer, setCommandUpdate, setHostLauncher, setInstaller, setWslLister, thisComputerHostIds,
   wslInstallCommand, type HostLink, type HostTarget, type InstallRun,
 } from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
+import { ApiError } from "../../src/shared";
 import { LocalHostsPanel } from "../../src/settings/ThisComputer";
 import { HomeCommandUpdate } from "../../src/components/CommandUpdate";
 
@@ -176,6 +177,8 @@ mount(() => (
       return { id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", code: "Z3AQnmLC6x9-xm2HZqXObhdMmKQhqLOKk3ST1ZuBYIw" };
     }} renameHost={async (server, connectorId, name) => {
       sent.update(list => [...list, `rename ${connectorId} to ${name}${server === SERVER ? "" : ` for ${server}`}`]);
+      if (name === "Removed there") throw new ApiError(404, "not_found", "Connector not found.");
+      if (name === "Server down") throw new ApiError(503, "unavailable", "The server is unavailable.");
     }} />
     <HomeCommandUpdate openLocalHosts={() => sent.update(list => [...list, "open local hosts"])} />
     <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />
@@ -186,6 +189,8 @@ mount(() => (
     <Text>{`this computer's hosts: ${thisComputerHostIds(SERVER).join(",") || "none"}`}</Text>
     <Text>{`hosts: ${localHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>
     <Button testID="fake-resume" label="Resume hosting" onPress={() => resumeThisComputer()} />
+    <Button testID="fake-renamed-old" label="Rename an old pairing elsewhere" onPress={() => void hostRenamed(SERVER, "c8", "Old pairing")} />
+    <Button testID="fake-renamed-current" label="Rename this host elsewhere" onPress={() => void hostRenamed(SERVER, "c9", "Renamed elsewhere")} />
     <Button testID="fake-auto-check" label="Scheduled check" onPress={() => void checkCommandUpdates()} />
     <Button testID="fake-read-session" label="Read a session" onPress={() => {
       const serving = localHosts().serving(SERVER);

@@ -2,7 +2,7 @@ import { effect, signal, untracked, View } from "nsh";
 import type { ConnectorPairing } from "../../../../packages/shared/src/connector";
 import { listedPrerequisites } from "../../../../packages/shared/src/host-prerequisites";
 import type { HostInspection, HostState, LoginMethodType, PrerequisiteFix } from "../../../../packages/shared/src/app-host-protocol";
-import { createApi } from "../shared";
+import { ApiError, createApi } from "../shared";
 import { servers, session } from "../lib/auth";
 import { openExternal } from "../lib/links";
 import { createAction } from "../lib/resource";
@@ -464,11 +464,19 @@ function HostSection(props: { host: LocalHost; createPairing: CreatePairing; ren
     if (next === untracked(() => host.name())) { renaming.set(false); return; }
     const origin = untracked(server);
     const connectorId = untracked(() => host.running()?.connectorId ?? host.config().connectorIds?.at(-1));
+    let onServer = false;
     const saved = await renameAction.run(async () => {
-      if (connectorId) await props.renameHost(origin, connectorId, next);
+      if (connectorId) {
+        try {
+          await props.renameHost(origin, connectorId, next);
+          onServer = true;
+        } catch (error) {
+          if (!(error instanceof ApiError && error.status === 404)) throw error;
+        }
+      }
       host.change({ name: next });
       name.set(next);
-    }, connectorId ? `Renamed to ${next}, here and on ${hostOf(origin)}.` : `Renamed to ${next} here. Rename it on ${hostOf(origin)} too, under Settings › Hosts.`);
+    }, () => (onServer ? `Renamed to ${next}, here and on ${hostOf(origin)}.` : `Renamed to ${next} here. Rename it on ${hostOf(origin)} too, under Settings › Hosts.`));
     if (saved) renaming.set(false);
   }
   const server = () => host.server();
