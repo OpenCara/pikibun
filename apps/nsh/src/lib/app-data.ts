@@ -1,6 +1,6 @@
 import { computed, context, effect, signal, Storage, untracked, type Accessor } from "nsh";
 import {
-  chatPreference, parseChatPreference, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
+  chatPreference, parseChatPreference, segment, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
   type SessionRecord, type Workspace,
 } from "../shared";
 import { session } from "./auth";
@@ -63,6 +63,7 @@ export interface AppData {
   workspacesError: Accessor<string>;
   refreshWorkspaces: () => Promise<void>;
   reorderWorkspaces: (ids: readonly string[]) => Promise<void>;
+  hideWorkspace: (id: string, hidden: boolean) => Promise<void>;
   lastWorkspaceId: Accessor<string>;
   setLastWorkspaceId: (id: string) => void;
   lastChat: Accessor<ChatPreference | undefined>;
@@ -86,17 +87,38 @@ export function createAppData(): AppData {
   const sessions = createResource<{ sessions: SessionRecord[] }>(() => "/api/sessions", () => (working() ? 10_000 : 30_000));
   const workspaces = createResource<{ workspaces: Workspace[] }>(() => "/api/workspaces");
   const pendingOrder = signal<readonly string[] | null>(null);
+  const pendingHidden = signal<Readonly<Record<string, boolean>>>({});
   const listedWorkspaces = computed(() => {
     const list = workspaces.data()?.workspaces ?? [];
     const order = pendingOrder();
-    return order ? orderWorkspaces(list, order) : list;
+    const ordered = order ? orderWorkspaces(list, order) : list;
+    const hiding = pendingHidden();
+    return Object.keys(hiding).length ? ordered.map(item => (item.id in hiding ? { ...item, hidden: hiding[item.id] } : item)) : ordered;
   });
-  let reorders = 0;
+  let writes = 0;
+  let writing: Promise<unknown> = Promise.resolve();
   effect(() => rememberLocalSessions(sessions.data()?.sessions ?? []));
   const sorted = computed(() => [...(sessions.data()?.sessions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   working = computed(() => liveActivity()?.activity === "working"
     || sorted().some(session => session.status !== "archived" && session.activity === "working"));
   const lastWorkspaceId = signal("");
+  async function writeWorkspaces(path: string, body: Record<string, unknown>): Promise<void> {
+    const write = ++writes;
+    const settle = () => { pendingOrder.set(null); pendingHidden.set({}); };
+    const sent = writing.then(() => untracked(session).api<{ workspaces: Workspace[] }>(path, { method: "PUT", body }));
+    writing = sent.catch(() => undefined);
+    try {
+      const result = await sent;
+      if (write !== writes) return;
+      workspaces.replace(result);
+      settle();
+    } catch (reason) {
+      if (write !== writes) return;
+      settle();
+      void workspaces.refresh();
+      throw reason;
+    }
+  }
   const lastChat = signal<ChatPreference | undefined>(undefined);
   Storage.getItem(LAST_CHAT_KEY).then(raw => { if (!lastChat()) lastChat.set(parseChatPreference(raw)); }, () => undefined);
   const lastAuto = signal<AutoPreference | undefined>(undefined);
@@ -114,20 +136,13 @@ export function createAppData(): AppData {
     workspacesLoading: () => workspaces.loading() && !workspaces.data(),
     workspacesError: workspaces.error,
     refreshWorkspaces: workspaces.refresh,
-    async reorderWorkspaces(ids) {
-      const reorder = ++reorders;
+    reorderWorkspaces(ids) {
       pendingOrder.set([...ids]);
-      try {
-        const result = await untracked(session).api<{ workspaces: Workspace[] }>("/api/workspaces/order", { method: "PUT", body: { workspaceIds: ids } });
-        if (reorder !== reorders) return;
-        workspaces.replace(result);
-        pendingOrder.set(null);
-      } catch (reason) {
-        if (reorder !== reorders) return;
-        pendingOrder.set(null);
-        void workspaces.refresh();
-        throw reason;
-      }
+      return writeWorkspaces("/api/workspaces/order", { workspaceIds: ids });
+    },
+    hideWorkspace(id, hidden) {
+      pendingHidden.update(current => ({ ...current, [id]: hidden }));
+      return writeWorkspaces(`/api/workspaces/${segment(id)}/hidden`, { hidden });
     },
     lastWorkspaceId,
     setLastWorkspaceId: id => lastWorkspaceId.set(id),

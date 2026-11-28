@@ -6,7 +6,7 @@ import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../compone
 import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
 import { stableRows } from "../lib/stable-rows";
-import { dropAt, dropIndex, movableIds, moveBy, type HeaderPlace } from "../lib/workspace-order";
+import { dropAt, dropIndex, movableIds, moveBy, withHidden, type HeaderPlace } from "../lib/workspace-order";
 import { session } from "../lib/auth";
 import { type Action } from "../lib/resource";
 import { Icon } from "../icons";
@@ -16,7 +16,7 @@ import {
 } from "../ui";
 
 type Row =
-  | { kind: "workspace"; key: string; id: string; title: string; count: number; archived: number; showArchived: boolean; canCreate: boolean }
+  | { kind: "workspace"; key: string; id: string; title: string; count: number; archived: number; showArchived: boolean; canCreate: boolean; hideable: boolean; hidden: boolean }
   | { kind: "session"; key: string; session: SessionRecord; depth: number }
   | { kind: "ask"; key: string; session: SessionRecord; ask: SideAskSummary; depth: number }
   | { kind: "start"; key: string; workspaceId: string };
@@ -66,6 +66,9 @@ export function SessionList(props: {
   const query = signal("");
   const showArchived = signal<readonly string[]>([]);
   const collapsed = signal<readonly string[]>([]);
+  const showHidden = signal(false);
+  const hiddenIds = computed(() => new Set(data.workspaces().filter(item => item.hidden && !item.personal).map(item => item.id)));
+  const selectedWorkspace = computed(() => (props.selectedId ? data.sessions().find(item => item.id === props.selectedId)?.workspaceId : undefined));
   const swiped = signal<string | null>(null);
   const swipe = (id: string, open: boolean) => swiped.update(current => (open ? id : current === id ? null : current));
   const severalComputers = computed(() => new Set(data.sessions().flatMap(item => (item.forwarded ? [item.forwarded.hostName] : []))).size > 1);
@@ -86,13 +89,15 @@ export function SessionList(props: {
     for (const id of [...(needle ? [] : data.workspaces().map(workspace => workspace.id)), ...archived.keys()]) if (!byWorkspace.has(id)) byWorkspace.set(id, []);
     const order = data.workspaces().map(workspace => workspace.id);
     const rank = (id: string) => { const index = order.indexOf(id); return index < 0 ? order.length : index; };
-    return [...byWorkspace.entries()].sort(([a], [b]) => rank(a) - rank(b)).flatMap(([id, sessions]): Row[] => {
+    const hidden = hiddenIds();
+    const listed = (id: string) => !hidden.has(id) || Boolean(needle) || showHidden() || id === selectedWorkspace();
+    return [...byWorkspace.entries()].filter(([id]) => listed(id)).sort(([a], [b]) => rank(a) - rank(b)).flatMap(([id, sessions]): Row[] => {
       const workspace = data.workspaces().find(item => item.id === id);
       const canCreate = Boolean(workspace && canCreateSessions(workspace.role));
       const folded = collapsed().includes(id) && !needle;
       return [
         { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, archived: archived.get(id) ?? 0, showArchived: showArchived().includes(id), canCreate,
-          title: workspace?.name ?? "Other workspace" },
+          hideable: Boolean(workspace && !workspace.personal), hidden: hidden.has(id), title: workspace?.name ?? "Other workspace" },
         ...(folded ? [] : sessionRows(sessions)),
         ...(!folded && !needle && !sessions.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
       ];
@@ -100,7 +105,7 @@ export function SessionList(props: {
   });
   const keep = stableRows<Row>();
   const rows = computed<Row[]>(() => keep(groupedRows()));
-  const order = computed(() => (query().trim() ? [] : movableIds(data.workspaces())));
+  const order = computed(() => (query().trim() ? [] : movableIds(data.workspaces().filter(item => showHidden() || !hiddenIds().has(item.id)))));
   const headers = new Map<ViewRef, string>();
   const dragging = signal<string | null>(null);
   const landing = signal<number | null>(null);
@@ -111,7 +116,11 @@ export function SessionList(props: {
   const reorder = (next: string[] | null) => {
     if (!next) return;
     orderError.set("");
-    data.reorderWorkspaces(next).catch(reason => orderError.set(errorMessage(reason)));
+    data.reorderWorkspaces(withHidden(movableIds(untracked(data.workspaces)), next)).catch(reason => orderError.set(errorMessage(reason)));
+  };
+  const hide = (id: string, hidden: boolean) => {
+    orderError.set("");
+    data.hideWorkspace(id, hidden).catch(reason => orderError.set(errorMessage(reason)));
   };
   const header = (ref: ViewRef, id: string | null) => { if (id) headers.set(ref, id); else headers.delete(ref); };
   const measure = async (): Promise<HeaderPlace[]> => {
@@ -192,6 +201,17 @@ export function SessionList(props: {
             <If when={dropLine() === "end"}>
               <View testID="workspace-drop-line" style={{ height: 2, borderRadius: 1, marginTop: -8, marginBottom: 6, backgroundColor: palette().tones.info.text }} />
             </If>
+            <If when={!query().trim() && hiddenIds().size > 0}>
+              <BaseButton testID="sidebar-hidden-workspaces" accessibilityLabel="Hidden workspaces" selected={showHidden()}
+                onPress={() => showHidden.update(current => !current)}
+                style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, minHeight: 34, borderRadius: radius.medium }}
+                hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
+                <Icon name="eye-off" size={14} color={palette().muted} />
+                <Text style={{ flex: 1, fontSize: text.body, color: palette().muted }}>Hidden workspaces</Text>
+                <Text testID="sidebar-hidden-count" style={{ fontSize: text.caption, color: palette().muted }}>{String(hiddenIds().size)}</Text>
+                <Icon name={showHidden() ? "chevron-up" : "chevron-down"} size={14} color={palette().muted} />
+              </BaseButton>
+            </If>
             <If when={props.onNewWorkspace && data.workspaces().length > 0}>
               <BaseButton testID="sidebar-new-workspace" accessibilityLabel="New workspace" onPress={() => props.onNewWorkspace?.()}
                 style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, minHeight: 34, borderRadius: radius.medium }}
@@ -226,7 +246,7 @@ export function SessionList(props: {
                 <If when={row().kind === "start" ? row() as Extract<Row, { kind: "start" }> : null}
                   else={
                     <WorkspaceRow row={row() as Extract<Row, { kind: "workspace" }>} collapsed={collapsed().includes((row() as Extract<Row, { kind: "workspace" }>).id)}
-                      onToggle={toggle} onToggleArchived={toggleArchived} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} action={menu.action}
+                      onToggle={toggle} onToggleArchived={toggleArchived} onHide={hide} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} action={menu.action}
                       order={order()} dragging={dragging() === (row() as Extract<Row, { kind: "workspace" }>).id}
                       dropLine={dropLine() === (row() as Extract<Row, { kind: "workspace" }>).id} drag={drag} onHeader={header} onMove={move} />
                   }>
@@ -266,7 +286,8 @@ interface WorkspaceDrag {
 }
 
 function WorkspaceRow(props: {
-  row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; onToggleArchived: (id: string) => void; compact?: boolean;
+  row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; onToggleArchived: (id: string) => void;
+  onHide: (id: string, hidden: boolean) => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void; action: Action;
   order: readonly string[]; dragging: boolean; dropLine: boolean; drag: WorkspaceDrag; onHeader: (ref: ViewRef, id: string | null) => void;
   onMove: (id: string, step: number) => void;
@@ -293,6 +314,8 @@ function WorkspaceRow(props: {
       ? [{ label: "Move down", icon: "arrow-down" as const, testID: `workspace-move-down-${props.row.id}`, onSelect: () => props.onMove(props.row.id, 1) }] : []),
     ...(props.row.archived > 0 ? [{ label: props.row.showArchived ? "Hide archived" : `Show archived (${props.row.archived})`, icon: "archive" as const,
       testID: `workspace-archived-${props.row.id}`, onSelect: () => props.onToggleArchived(props.row.id) }] : []),
+    ...(props.row.hideable ? [{ label: props.row.hidden ? "Show in sidebar" : "Hide from sidebar", icon: props.row.hidden ? "eye" as const : "eye-off" as const,
+      testID: `workspace-hide-${props.row.id}`, onSelect: () => props.onHide(props.row.id, !props.row.hidden) }] : []),
     "separator",
     { label: "Copy workspace ID", icon: "copy", testID: `workspace-copy-id-${props.row.id}`, onSelect: () => void props.action.run(() => writeClipboard(props.row.id), "Workspace ID copied") },
     ...(props.onSettings ? [{ label: "Workspace settings", icon: "settings" as const, testID: `workspace-settings-${props.row.id}`, onSelect: () => props.onSettings!(props.row.id) }] : []),
@@ -311,7 +334,10 @@ function WorkspaceRow(props: {
             borderRadius: radius.medium }}
           hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
           <IdentityBadge name={props.row.title} id={props.row.id} />
-          <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.body, color: palette().text }}>{props.row.title}</Text>
+          <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.body, color: props.row.hidden ? palette().muted : palette().text }}>{props.row.title}</Text>
+          <If when={props.row.hidden}>
+            <Icon name="eye-off" size={12} color={palette().faint} />
+          </If>
           <If when={props.collapsed}>
             <Text style={{ fontSize: text.caption, color: palette().muted }}>{String(props.row.count)}</Text>
           </If>

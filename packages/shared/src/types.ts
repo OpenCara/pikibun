@@ -90,6 +90,7 @@ export interface Workspace {
   ownerId: string;
   role?: WorkspaceRole;
   personal?: boolean;
+  hidden?: boolean;
 }
 export interface DeletedWorkspace {
   id: string;

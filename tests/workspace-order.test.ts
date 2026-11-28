@@ -5,7 +5,7 @@ import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { testDatabase } from './helpers/control-plane.js';
 import type { Workspace } from '../packages/shared/src/types.js';
-import { dropAt, dropIndex, movableIds, moveBy, orderWorkspaces } from '../apps/nsh/src/lib/workspace-order.js';
+import { dropAt, dropIndex, movableIds, moveBy, orderWorkspaces, withHidden } from '../apps/nsh/src/lib/workspace-order.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'workspace-order-test-secret-not-for-deployment';
@@ -89,11 +89,53 @@ test('the order is checked: a list of distinct workspace IDs and nothing else', 
   await json(await alice.request('PUT', '/api/workspaces/order', { workspaceIds: [] }));
 });
 
+test('each member hides their own workspaces from the sidebar, never the private one, and keeps their order', async t => {
+  const f = await fixture(t);
+  const alice = await f.client('alice');
+  const bob = await f.client('bob');
+  const carol = await f.client('carol');
+  const [own] = await list(alice);
+  const first = await create(alice, 'First');
+  const team = await create(bob, 'Team');
+  await json(await bob.request('POST', `/api/workspaces/${team.id}/members`, { userId: alice.user.id, role: 'member' }));
+  await json(await alice.request('PUT', '/api/workspaces/order', { workspaceIds: [team.id, first.id] }));
+  const hidden = (items: Workspace[]) => items.filter(item => item.hidden).map(item => item.name);
+
+  const saved = await json<{ workspaces: Workspace[] }>(await alice.request('PUT', `/api/workspaces/${team.id}/hidden`, { hidden: true }));
+  assert.deepEqual(hidden(saved.workspaces), ['Team']);
+  assert.deepEqual((await list(alice)).map(item => item.name), ['Private', 'Team', 'First']);
+  assert.deepEqual(hidden(await list(alice)), ['Team']);
+  assert.deepEqual(hidden(await list(bob)), []);
+  await json(await alice.request('PUT', `/api/workspaces/${team.id}/hidden`, { hidden: true }));
+  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_hidden WHERE user_id = ?').get(alice.user.id) as { n: number }).n, 1);
+
+  await json(await alice.request('PUT', '/api/workspaces/order', { workspaceIds: [first.id, team.id] }));
+  assert.deepEqual(hidden(await list(alice)), ['Team']);
+
+  const refused = await json<{ code: string }>(await alice.request('PUT', `/api/workspaces/${own!.id}/hidden`, { hidden: true }), 400);
+  assert.equal(refused.code, 'invalid_input');
+  await json(await alice.request('PUT', `/api/workspaces/${own!.id}/hidden`, { hidden: false }));
+  await json(await carol.request('PUT', `/api/workspaces/${team.id}/hidden`, { hidden: true }), 404);
+  for (const body of [{}, { hidden: 'yes' }, { hidden: true, extra: 1 }]) {
+    assert.equal((await json<{ code: string }>(await alice.request('PUT', `/api/workspaces/${first.id}/hidden`, body), 400)).code, 'invalid_input');
+  }
+
+  const shown = await json<{ workspaces: Workspace[] }>(await alice.request('PUT', `/api/workspaces/${team.id}/hidden`, { hidden: false }));
+  assert.deepEqual(hidden(shown.workspaces), []);
+  await json(await alice.request('PUT', `/api/workspaces/${team.id}/hidden`, { hidden: true }));
+  assert.ok((await bob.request('DELETE', `/api/workspaces/${team.id}/members/${encodeURIComponent(alice.user.id)}`)).ok);
+  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_hidden WHERE user_id = ?').get(alice.user.id) as { n: number }).n, 0);
+  await json(await bob.request('POST', `/api/workspaces/${team.id}/members`, { userId: alice.user.id, role: 'member' }));
+  assert.deepEqual(hidden(await list(alice)), []);
+});
+
 test('the client orders, moves and drops workspaces as the sidebar shows them', () => {
   const listed = [{ id: 'p', personal: true }, { id: 'a' }, { id: 'b' }, { id: 'c' }];
   assert.deepEqual(orderWorkspaces(listed, ['c', 'p', 'a']).map(item => item.id), ['p', 'c', 'a', 'b']);
   assert.deepEqual(movableIds(listed), ['a', 'b', 'c']);
   assert.deepEqual(moveBy(['a', 'b', 'c'], 'a', 1), ['b', 'a', 'c']);
+  assert.deepEqual(withHidden(['a', 'b', 'c', 'd'], ['c', 'a', 'd']), ['c', 'b', 'a', 'd']);
+  assert.deepEqual(withHidden(['a', 'b'], ['b', 'a']), ['b', 'a']);
   assert.equal(moveBy(['a', 'b', 'c'], 'a', -1), null);
   assert.equal(moveBy(['a', 'b', 'c'], 'c', 1), null);
 

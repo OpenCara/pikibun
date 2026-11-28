@@ -116,6 +116,20 @@ describe("reordering workspaces", () => {
     expect(sidebar(app)).toEqual(["Private", "Analytical Engine", "Difference Engine", "Jacquard Loom"]);
   });
 
+  test("a refused move that a later move already replaced says nothing once the later one is saved", async () => {
+    const app = await open("../App.tsx", { network: network((request, count) => (count === 1 ? { status: 500, body: { error: "Could not save the order.", code: "internal" }, delay: 400 } : saved(request))),
+      storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.waitFor("id:workspace-options-w1");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.waitUntil(() => orders(app).length === 2);
+    await app.waitUntil(() => sidebar(app)[3] === "Analytical Engine");
+    await app.wait(200);
+    expect(app.shows("id:workspace-order-feedback")).toBe(false);
+  });
+
   test("on a phone, a workspace moves by its grip, and the private workspace has none", async () => {
     const app = await open("../App.tsx", { network: network(), storage: signedIn });
     await app.waitFor("id:workspace-drag-w1");
@@ -123,5 +137,110 @@ describe("reordering workspaces", () => {
     await app.drag("id:workspace-drag-w1", { y: 500 });
     await app.waitUntil(() => orders(app).length === 1);
     expect(orders(app)[0]).toEqual(["w2", "w3", "w1"]);
+  });
+});
+
+describe("hiding workspaces", () => {
+  const hides = (app: App) => app.requests().filter(item => item.method === "PUT" && item.url.endsWith("/hidden"))
+    .map(item => ({ id: item.url.split("/").at(-2), hidden: JSON.parse(item.body ?? "{}").hidden as boolean }));
+  const hiding = (start: readonly string[] = [], answer?: (count: number) => Record<string, unknown> | undefined, delay = 0) => {
+    let hidden = new Set(start);
+    let order = listed.filter(item => item.id !== personal.id).map(item => item.id);
+    let count = 0;
+    const current = () => [personal, ...order.map(id => listed.find(item => item.id === id)!)].map(item => (hidden.has(item.id) ? { ...item, hidden: true } : item));
+    return server({
+      [`GET ${ORIGIN}/api/workspaces`]: () => ({ body: { workspaces: current() } }),
+      [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [
+        { ...sessionRecord, id: "s-loom", workspaceId: "w3", title: "Weave the pattern" },
+        { ...sessionRecord, id: "s-engine", workspaceId: "w1", title: "Compute the table" },
+      ] } },
+      [`PUT ${ORIGIN}/api/workspaces/order`]: (request: Request) => {
+        order = JSON.parse(request.body ?? "{}").workspaceIds as string[];
+        return { body: { workspaces: current() }, ...(delay ? { delay } : {}) };
+      },
+      ...Object.fromEntries(listed.map(item => [`PUT ${ORIGIN}/api/workspaces/${item.id}/hidden`, (request: Request) => {
+        const refused = answer?.(++count);
+        if (refused) return refused;
+        const next = JSON.parse(request.body ?? "{}").hidden as boolean;
+        hidden = new Set([...hidden].filter(id => id !== item.id).concat(next ? [item.id] : []));
+        return { body: { workspaces: current() } };
+      }])),
+    });
+  };
+  const desktop = { storage: signedIn, platform: "macos" as const, width: 1280, height: 820 };
+
+  test("a workspace hidden from its menu leaves the sidebar, and the hidden row shows it again to bring it back", async () => {
+    const app = await open("../App.tsx", { network: hiding(), ...desktop });
+    await app.waitFor("id:workspace-options-w3");
+    expect(app.shows("id:sidebar-hidden-workspaces")).toBe(false);
+    await app.press("id:workspace-options-w3");
+    await app.press("id:workspace-hide-w3");
+    await app.waitUntil(() => !app.shows("id:workspace-row-w3"));
+    expect(hides(app)).toEqual([{ id: "w3", hidden: true }]);
+    expect(app.shows("text:Weave the pattern")).toBe(false);
+    await app.waitFor("id:sidebar-hidden-workspaces");
+    expect(app.shows("text:Hidden workspaces")).toBe(true);
+
+    await app.press("id:sidebar-hidden-workspaces");
+    await app.waitFor("id:workspace-row-w3");
+    await app.press("id:workspace-options-w3");
+    await app.press("id:workspace-hide-w3");
+    await app.waitUntil(() => hides(app).length === 2);
+    expect(hides(app)[1]).toEqual({ id: "w3", hidden: false });
+    await app.waitUntil(() => !app.shows("id:sidebar-hidden-workspaces"));
+    expect(app.shows("id:workspace-row-w3")).toBe(true);
+  });
+
+  test("the private workspace can't be hidden, and search still finds a hidden workspace's sessions", async () => {
+    const app = await open("../App.tsx", { network: hiding(["w3"]), ...desktop });
+    await app.waitFor("id:sidebar-hidden-workspaces");
+    expect(app.shows("id:workspace-row-w3")).toBe(false);
+    await app.press("id:workspace-options-w0");
+    await app.waitFor("id:workspace-copy-id-w0");
+    expect(app.shows("id:workspace-hide-w0")).toBe(false);
+    await app.press("id:workspace-options-w0");
+
+    await app.type("id:session-search", "weave");
+    await app.waitFor("text:Weave the pattern");
+    expect(app.shows("id:sidebar-hidden-workspaces")).toBe(false);
+  });
+
+  test("moving a workspace past a hidden one keeps the hidden one's place in the saved order", async () => {
+    const app = await open("../App.tsx", { network: hiding(["w2"]), ...desktop });
+    await app.waitFor("id:workspace-options-w1");
+    expect(sidebar(app).slice(0, 3)).toEqual(["Private", "Analytical Engine", "Jacquard Loom"]);
+    expect(app.shows("id:workspace-row-w2")).toBe(false);
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.waitUntil(() => orders(app).length === 1);
+    expect(orders(app)[0]).toEqual(["w3", "w2", "w1"]);
+  });
+
+  test("a hide made while a move is saving waits for it, and keeps both the move and the hide", async () => {
+    const app = await open("../App.tsx", { network: hiding([], undefined, 600), ...desktop });
+    await app.waitFor("id:workspace-options-w1");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.press("id:workspace-options-w3");
+    await app.press("id:workspace-hide-w3");
+    await app.waitUntil(() => !app.shows("id:workspace-row-w3"));
+    expect(sidebar(app).slice(0, 3)).toEqual(["Private", "Difference Engine", "Analytical Engine"]);
+    expect(hides(app)).toEqual([]);
+    await app.waitUntil(() => hides(app).length === 1);
+    await app.wait(300);
+    expect(orders(app)).toEqual([["w2", "w1", "w3"]]);
+    expect(sidebar(app).slice(0, 3)).toEqual(["Private", "Difference Engine", "Analytical Engine"]);
+    expect(app.shows("id:workspace-row-w3")).toBe(false);
+    expect(app.shows("id:sidebar-hidden-workspaces")).toBe(true);
+  });
+
+  test("a hide the server refuses says why, and the workspace comes back", async () => {
+    const app = await open("../App.tsx", { network: hiding([], () => ({ status: 500, body: { error: "Could not hide it.", code: "internal" } })), ...desktop });
+    await app.waitFor("id:workspace-options-w2");
+    await app.press("id:workspace-options-w2");
+    await app.press("id:workspace-hide-w2");
+    await app.waitFor("id:workspace-order-feedback");
+    await app.waitFor("id:workspace-row-w2");
+    expect(app.shows("id:sidebar-hidden-workspaces")).toBe(false);
   });
 });
