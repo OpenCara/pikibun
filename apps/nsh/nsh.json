@@ -3,7 +3,7 @@
   "id": "com.pikibun.app",
   "version": "0.1.0",
   "build": 1,
-  "nsh": ">=0.7.0",
+  "nsh": ">=0.7.2",
   "icon": "icon.png",
   "schemes": ["pikibun"],
   "capabilities": {
