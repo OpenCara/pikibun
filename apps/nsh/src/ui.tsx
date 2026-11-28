@@ -1,10 +1,19 @@
-import { cleanup, computed, createAnimatedValue, effect, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
-import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
+import { cleanup, computed, createAnimatedValue, effect, keymap, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
+import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Input, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import { writeClipboard } from "./lib/clipboard";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
 export const phoneWidth = () => windowSize().width > 0 && windowSize().width <= 600;
+
+export function shortcutLabel(binding: string | undefined): string | undefined {
+  if (!binding || !platform.desktop) return undefined;
+  try {
+    return keymap.label(binding);
+  } catch {
+    return undefined;
+  }
+}
 
 type ButtonVariant = "primary" | "default" | "outline" | "ghost" | "danger" | "accent";
 
@@ -59,14 +68,16 @@ export function Button(props: {
 }
 
 export function IconButton(props: {
-  icon: IconName; label: string; onPress: () => void; badge?: number; disabled?: boolean; testID?: string; active?: boolean; tone?: Tone; size?: number;
+  icon: IconName; label: string; onPress: () => void; badge?: number; disabled?: boolean; testID?: string; active?: boolean; tone?: Tone; size?: number; shortcut?: string;
 }) {
   const color = () => (props.tone ? palette().tones[props.tone].text : props.active ? palette().text : palette().muted);
   const size = () => props.size ?? control.small;
+  const keys = () => shortcutLabel(props.shortcut);
   return (
     <BaseButton testID={props.testID} accessibilityLabel={props.label} disabled={props.disabled} onPress={props.onPress} hitSlop={6}
-      tooltip={<Tooltip style={{ backgroundColor: palette().primary, borderRadius: radius.small, paddingHorizontal: 8, paddingVertical: 4 }}>
+      tooltip={<Tooltip style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: palette().primary, borderRadius: radius.small, paddingHorizontal: 8, paddingVertical: 4 }}>
         <Text style={{ fontSize: text.caption, color: palette().onPrimary }}>{props.label}</Text>
+        <If when={keys()}>{value => <Text style={{ fontSize: text.caption, color: palette().onPrimary, opacity: 0.65 }}>{value()}</Text>}</If>
       </Tooltip>}
       style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, minWidth: size(), height: size(), paddingHorizontal: (props.badge ?? 0) > 0 ? 6 : 0,
         borderRadius: size() > control.small ? radius.medium : radius.small, backgroundColor: props.active ? palette().selection : "transparent" }}
@@ -217,6 +228,23 @@ export function NavItem(props: { icon?: IconName; leading?: JSX.Element; label: 
       <If when={props.icon} else={props.leading}>{name => <Icon name={name()} size={16} color={color()} />}</If>
       <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.body, fontWeight: props.strong ? weight.medium : weight.normal, color: color() }}>{props.label}</Text>
     </BaseButton>
+  );
+}
+
+export function SearchField(props: {
+  value: string; onChange: (value: string) => void; placeholder: string; label?: string; testID?: string; compact?: boolean; onSubmit?: () => void;
+}) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, borderRadius: radius.medium, paddingLeft: 10, paddingRight: props.value ? 4 : 10,
+      height: props.compact ? control.small : control.medium, backgroundColor: palette().surface, borderWidth: 1, borderColor: palette().border }}>
+      <Icon name="search" size={14} color={palette().muted} />
+      <Input value={props.value} onChange={event => props.onChange(event.value)} placeholder={props.placeholder} accessibilityLabel={props.label ?? props.placeholder}
+        autoCorrect={false} autoCapitalize="none" testID={props.testID} returnKeyType="search" onSubmit={() => props.onSubmit?.()}
+        style={{ flex: 1, fontSize: props.compact ? text.body : text.large, color: palette().text, placeholderColor: palette().muted }} />
+      <If when={props.value}>
+        <IconButton testID={props.testID ? `${props.testID}-clear` : undefined} icon="x" label="Clear search" size={control.xsmall - 6} onPress={() => props.onChange("")} />
+      </If>
+    </View>
   );
 }
 
