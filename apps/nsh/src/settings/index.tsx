@@ -1,4 +1,5 @@
 import { signal, Text, View, type JSX } from "nsh";
+import { t } from "nsh/i18n";
 import { session } from "../lib/auth";
 import { displayOrigin } from "../lib/server";
 import { computerTitle, hostsHere } from "../lib/this-computer";
@@ -48,24 +49,26 @@ const passwordsOffered = () => serverHealth()?.passwordAuth === true;
 export const serverVersion = () => serverHealth()?.version ?? null;
 export const codeSignInOffered = () => serverHealth()?.codeSignIn !== false;
 
-export const settingsSections: readonly SettingsSection[] = [
-  { id: "profile", label: "Profile", icon: "user", scope: "server", Component: Profile },
-  { id: "password", label: "Password", icon: "lock", scope: "server", passwords: true, Component: Password },
-  { id: "notifications", label: "Notifications", icon: "bell", scope: "server", Component: Notifications },
-  { id: "hosts", label: "Hosts", icon: "server", scope: "server", Component: Hosts },
-  { id: "workspaces", label: "Workspaces", icon: "users", scope: "server", Component: Workspaces },
-  { id: "mcp-sharing", label: "MCP sharing", icon: "sparkles", scope: "server", keywords: ["remote MCP", "share", "connections"], Component: McpSharing },
-  { id: "admin", label: "Administration", icon: "shield", scope: "server", admin: true, Component: Administration },
-  { id: "desktop", label: "Local hosts", icon: "monitor", scope: "device", keywords: [computerTitle, "pair", "sandbox", "WSL"], desktop: true, Component: ThisComputer },
-  { id: "self-host", label: "Self host", icon: "database", scope: "device", desktop: true, Component: SelfHost },
-  { id: "appearance", label: "Appearance", icon: "palette", scope: "device", Component: Appearance },
+const sectionList: Omit<SettingsSection, "label">[] = [
+  { id: "profile", icon: "user", scope: "server", Component: Profile },
+  { id: "password", icon: "lock", scope: "server", passwords: true, Component: Password },
+  { id: "notifications", icon: "bell", scope: "server", Component: Notifications },
+  { id: "hosts", icon: "server", scope: "server", Component: Hosts },
+  { id: "workspaces", icon: "users", scope: "server", Component: Workspaces },
+  { id: "mcp-sharing", icon: "sparkles", scope: "server", keywords: ["remote MCP", "share", "connections"], Component: McpSharing },
+  { id: "admin", icon: "shield", scope: "server", admin: true, Component: Administration },
+  { id: "desktop", icon: "monitor", scope: "device", keywords: [computerTitle, "pair", "sandbox", "WSL"], desktop: true, Component: ThisComputer },
+  { id: "self-host", icon: "database", scope: "device", desktop: true, Component: SelfHost },
+  { id: "appearance", icon: "palette", scope: "device", Component: Appearance },
 ];
 
+export const settingsSections: readonly SettingsSection[] = sectionList.map(section => ({ ...section, get label() { return t(`settings.section.${section.id}`); } }));
+
 export const scopes: readonly SettingsScope[] = ["server", "device"];
-export const deviceTitle = hostsHere ? computerTitle : "This device";
+export const deviceTitle = (): string => (hostsHere ? computerTitle : t("settings.this_device"));
 
 export function scopeTitle(scope: SettingsScope): string {
-  return scope === "device" ? deviceTitle : displayOrigin(session().origin);
+  return scope === "device" ? deviceTitle() : displayOrigin(session().origin);
 }
 
 export function visibleSections(shown?: string): SettingsSection[] {
@@ -111,7 +114,7 @@ export function SectionList(props: { selected?: string; onOpen: (id: string) => 
         </View>
       }>
       <View testID="settings-sections" style={{ gap: 2, paddingVertical: 16, paddingHorizontal: 8 }}>
-        <Text style={{ paddingTop: 8, paddingHorizontal: 12, paddingBottom: 4, fontSize: text.small, fontWeight: weight.medium, color: palette().muted }}>Settings</Text>
+        <Text style={{ paddingTop: 8, paddingHorizontal: 12, paddingBottom: 4, fontSize: text.small, fontWeight: weight.medium, color: palette().muted }}>{t("nav.settings")}</Text>
         <Each of={groups(props.selected)} key={group => group.scope}>
           {group => (
             <View testID={`settings-group-${group().scope}`} style={{ gap: 2 }}>
@@ -127,7 +130,7 @@ export function SectionList(props: { selected?: string; onOpen: (id: string) => 
           )}
         </Each>
         <If when={serverVersion()}>
-          {version => <Text testID="settings-server-version" style={{ paddingTop: 16, paddingHorizontal: 12, fontSize: text.caption, color: palette().faint }}>{`Pikibun server ${version()}`}</Text>}
+          {version => <Text testID="settings-server-version" style={{ paddingTop: 16, paddingHorizontal: 12, fontSize: text.caption, color: palette().faint }}>{t("settings.server_version", { version: version() })}</Text>}
         </If>
       </View>
     </If>

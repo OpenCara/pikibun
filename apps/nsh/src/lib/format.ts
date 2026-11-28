@@ -1,3 +1,5 @@
+import { locale } from "nsh";
+import { t } from "nsh/i18n";
 import type { SessionView } from "../../../../packages/shared/src/types";
 import { cacheHitRate } from "../../../../packages/shared/src/usage";
 import type { EntryView } from "../shared";
@@ -56,27 +58,38 @@ export function usageStatus(view: Pick<SessionView, "context" | "usage"> | undef
   return text.length ? { text: text.join(" · "), label: `Session: ${label.join(", ")}` } : undefined;
 }
 
-const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const pad = (n: number) => String(n).padStart(2, "0");
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function dateFormat(kind: "date" | "time"): Intl.DateTimeFormat {
+  const tag = locale();
+  const key = `${kind} ${tag}`;
+  let format = formatters.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(tag, kind === "date"
+      ? { year: "numeric", month: "short", day: "numeric" }
+      : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    formatters.set(key, format);
+  }
+  return format;
+}
 
 export function dateLabel(date: Date): string {
-  return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
+  return dateFormat("date").format(date);
 }
 
 export function relativeTime(value: string, now = Date.now()): string {
   const time = new Date(value).getTime();
   if (Number.isNaN(time)) return "";
   const minutes = Math.floor((now - time) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)} h ago`;
-  if (minutes < 10_080) return `${Math.floor(minutes / 1440)} d ago`;
+  if (minutes < 1) return t("time.just_now");
+  if (minutes < 60) return t("time.minutes_ago", { n: minutes });
+  if (minutes < 1440) return t("time.hours_ago", { n: Math.floor(minutes / 60) });
+  if (minutes < 10_080) return t("time.days_ago", { n: Math.floor(minutes / 1440) });
   return dateLabel(new Date(time));
 }
 
 export function timestamp(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : `${dateLabel(date)}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return Number.isNaN(date.getTime()) ? value : dateFormat("time").format(date);
 }
 
 export function modelFailure({ provider, modelId, status, cause, compacting }: NonNullable<EntryView["error"]>, { advice = true }: { advice?: boolean } = {}): string {

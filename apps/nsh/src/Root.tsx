@@ -1,5 +1,6 @@
 import { computed, effect, keymap, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
+import { t } from "nsh/i18n";
 import { HomeUpdate } from "./components/AppUpdate";
 import { HomeCommandUpdate } from "./components/CommandUpdate";
 import { CommandPalette } from "./components/CommandPalette";
@@ -26,6 +27,7 @@ import { SessionView } from "./screens/SessionView";
 import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
 import { UsernameSetup } from "./screens/UsernameSetup";
+import { applyStoredLanguage } from "./lib/language";
 import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, scopeTitle, SectionList, visibleSections } from "./settings";
 import { canCreateSessions, type PaletteSession } from "./shared";
@@ -48,6 +50,7 @@ const WIDE = 700;
 export function Root() {
   startPage();
   void applyStoredAppearance();
+  void applyStoredLanguage();
   void restore();
   resumeThisComputer();
   resumeThisServer();
@@ -208,7 +211,7 @@ function Shell() {
   }
   const workspaceName = (id: string) => data.workspaces().find(workspace => workspace.id === id)?.name;
   const paletteSessions = computed((): PaletteSession[] => data.sessions().map(item => ({
-    id: item.id, title: item.title, hint: [workspaceName(item.workspaceId), item.status === "archived" ? "Archived" : undefined].filter(Boolean).join(" · ") || undefined,
+    id: item.id, title: item.title, hint: [workspaceName(item.workspaceId), item.status === "archived" ? t("nav.archived") : undefined].filter(Boolean).join(" · ") || undefined,
   })));
   commands.contribute(() => shellCommands({ data, current: currentSession(), startNew, openSession: openFromPalette, openSettings,
     allSessions: () => go({ name: "sessions" }), openById: () => nav.push({ name: "open" }), newWorkspace: () => creatingWorkspace.set(true) }));
@@ -218,12 +221,12 @@ function Shell() {
   const workspaceSettings = (workspaceId: string) => openSettings("workspaces", workspaceId);
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-      <IconButton testID="open-commands" icon="command" label="Commands" onPress={() => commands.open()} />
-      <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
-      <IconButton testID="new-session" icon="plus" label="New session" onPress={() => startNew()} />
+      <IconButton testID="open-commands" icon="command" label={t("nav.commands")} onPress={() => commands.open()} />
+      <IconButton testID="open-by-id" icon="hash" label={t("nav.open_session_by_id")} onPress={() => nav.push({ name: "open" })} />
+      <IconButton testID="new-session" icon="plus" label={t("nav.new_session")} onPress={() => startNew()} />
     </View>
   );
-  const settingsButton = () => <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => openSettings()} />;
+  const settingsButton = () => <IconButton testID="open-settings" icon="settings" label={t("nav.settings")} onPress={() => openSettings()} />;
 
   return (
     <AppDataContext.Provider value={data}>
@@ -235,7 +238,7 @@ function Shell() {
               return (
                 <If when={wide()}
                   else={
-                    <Page title="Sessions" leading={drawsHeaders ? <Logo size={22} /> : settingsButton()} actions={drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions()}>
+                    <Page title={t("nav.sessions")} leading={drawsHeaders ? <Logo size={22} /> : settingsButton()} actions={drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions()}>
                       <View style={{ flex: 1 }}>
                         <HomeUpdate style={{ paddingHorizontal: 16, paddingTop: 12 }} />
                         <HomeCommandUpdate style={{ paddingHorizontal: 16, paddingTop: 12 }} openLocalHosts={() => openSettings("desktop")} />
@@ -273,25 +276,25 @@ function Shell() {
               return <SessionView id={route.id} page front={() => sessionInFront(route.id)} openSession={openSession} onBack={back} go={go} />;
             case "new":
               return (
-                <Page title="New session" onBack={back}>
+                <Page title={t("nav.new_session")} onBack={back}>
                   <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} go={go} />
                 </Page>
               );
             case "all-sessions":
               return (
-                <Page title="Sessions" onBack={back}>
+                <Page title={t("nav.sessions")} onBack={back}>
                   <Sessions onOpen={openFromPage} onOpenById={() => nav.push({ name: "open" })} onNew={() => startNew()} />
                 </Page>
               );
             case "open":
               return (
-                <Page title="Open a session" onBack={back}>
+                <Page title={t("nav.open_session")} onBack={back}>
                   <OpenSession onOpen={openFromPage} />
                 </Page>
               );
             case "settings":
               return (
-                <Page title="Settings" onBack={back}>
+                <Page title={t("nav.settings")} onBack={back}>
                   <SettingsPage section={settingsAt().section} id={settingsAt().id} wide={wide()} onOpen={id => openSettings(id)} go={go} />
                 </Page>
               );
@@ -305,7 +308,7 @@ function Shell() {
             }
             case "join":
               return (
-                <Page title="Join a workspace" onBack={back}>
+                <Page title={t("nav.join_workspace")} onBack={back}>
                   <JoinWorkspace token={route.token} onDone={() => nav.popToRoot()} go={go} />
                 </Page>
               );
@@ -329,34 +332,34 @@ function shellCommands(options: {
   const workspaceName = (id: string) => workspaces.find(workspace => workspace.id === id)?.name;
   const sections = visibleSections().filter(section => section.id !== "workspaces");
   return [
-    { id: "new-session", title: "New session", group: "Sessions", scope: "global", icon: "plus", keywords: ["start", "create"], run: () => options.startNew() },
+    { id: "new-session", title: t("nav.new_session"), group: t("nav.sessions"), scope: "global", icon: "plus", keywords: ["start", "create"], run: () => options.startNew() },
     ...(creatable.length > 1 ? [{
-      id: "new-session-in", title: "New session in…", group: "Sessions", scope: "global", icon: "plus", keywords: ["workspace", "start", "create"],
-      input: { kind: "choice", placeholder: "Choose a workspace", choices: () => creatable.map(workspace => ({ value: workspace.id, label: workspace.name })),
+      id: "new-session-in", title: t("commands.new_session_in"), group: t("nav.sessions"), scope: "global", icon: "plus", keywords: ["workspace", "start", "create"],
+      input: { kind: "choice", placeholder: t("commands.choose_workspace"), choices: () => creatable.map(workspace => ({ value: workspace.id, label: workspace.name })),
         choose: id => options.startNew(id) },
     } satisfies AppCommand] : []),
     {
-      id: "switch-session", title: "Switch session…", group: "Sessions", scope: "global", icon: "history", binding: "mod+o", keywords: ["open", "go to"],
-      input: { kind: "choice", placeholder: "Type a session's title", empty: "No sessions yet",
+      id: "switch-session", title: t("commands.switch_session"), group: t("nav.sessions"), scope: "global", icon: "history", binding: "mod+o", keywords: ["open", "go to"],
+      input: { kind: "choice", placeholder: t("commands.type_session_title"), empty: t("commands.no_sessions"),
         choices: () => data.sessions().filter(item => item.status !== "archived").map(item => ({
           value: item.id, label: item.title, hint: workspaceName(item.workspaceId), current: item.id === options.current,
         })),
         choose: id => options.openSession(id) },
     },
-    { id: "all-sessions", title: "All sessions", group: "Sessions", scope: "global", icon: "list", keywords: ["archived", "search"], run: options.allSessions },
-    { id: "open-by-id", title: "Open a session by ID", group: "Sessions", scope: "global", icon: "hash", run: options.openById },
-    { id: "settings", title: "Settings", group: "Settings", scope: "global", icon: "settings", keywords: ["preferences"], run: () => options.openSettings() },
+    { id: "all-sessions", title: t("nav.all_sessions"), group: t("nav.sessions"), scope: "global", icon: "list", keywords: ["archived", "search"], run: options.allSessions },
+    { id: "open-by-id", title: t("nav.open_session_by_id"), group: t("nav.sessions"), scope: "global", icon: "hash", run: options.openById },
+    { id: "settings", title: t("nav.settings"), group: t("nav.settings"), scope: "global", icon: "settings", keywords: ["preferences"], run: () => options.openSettings() },
     ...sections.map((section): AppCommand => ({
-      id: `settings-${section.id}`, title: section.label, group: "Settings", scope: "global", icon: section.icon, hint: scopeTitle(section.scope),
+      id: `settings-${section.id}`, title: section.label, group: t("nav.settings"), scope: "global", icon: section.icon, hint: scopeTitle(section.scope),
       ...(section.keywords ? { keywords: section.keywords } : {}), run: () => options.openSettings(section.id),
     })),
     {
-      id: "workspaces", title: "Workspaces…", group: "Settings", scope: "global", icon: "users", keywords: ["workspace settings", "members"],
-      input: { kind: "choice", placeholder: "Choose a workspace", empty: "No workspaces yet",
-        choices: () => [{ value: "", label: "All workspaces" }, ...workspaces.map(workspace => ({ value: workspace.id, label: workspace.name, hint: workspace.role }))],
+      id: "workspaces", title: t("commands.workspaces"), group: t("nav.settings"), scope: "global", icon: "users", keywords: ["workspace settings", "members"],
+      input: { kind: "choice", placeholder: t("commands.choose_workspace"), empty: t("commands.no_workspaces"),
+        choices: () => [{ value: "", label: t("commands.all_workspaces") }, ...workspaces.map(workspace => ({ value: workspace.id, label: workspace.name, hint: workspace.role }))],
         choose: id => options.openSettings("workspaces", id || undefined) },
     },
-    { id: "new-workspace", title: "New workspace", group: "Settings", scope: "global", icon: "plus", keywords: ["create workspace"], run: options.newWorkspace },
+    { id: "new-workspace", title: t("commands.new_workspace"), group: t("nav.settings"), scope: "global", icon: "plus", keywords: ["create workspace"], run: options.newWorkspace },
   ];
 }
 
@@ -393,10 +396,10 @@ function Sidebar(props: {
     <View testID="sidebar" style={{ width: layout.sidebar, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
       <View desktop={{ windowDrag: true }} style={{ gap: 2, paddingTop: 12, paddingHorizontal: 8, paddingBottom: 8 }}>
         <NavItem label="Pikibun" strong leading={<Logo size={20} />} />
-        <NavItem testID="new-session" icon="plus" label="New session" active={props.home} onPress={props.onNew} />
-        <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
-        <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
-        <NavItem testID="open-commands" icon="command" label="Commands" onPress={props.onCommands} />
+        <NavItem testID="new-session" icon="plus" label={t("nav.new_session")} active={props.home} onPress={props.onNew} />
+        <NavItem testID="all-sessions" icon="history" label={t("nav.sessions")} onPress={props.onAll} />
+        <NavItem testID="open-by-id" icon="hash" label={t("nav.open_by_id")} onPress={props.onOpenById} />
+        <NavItem testID="open-commands" icon="command" label={t("nav.commands")} onPress={props.onCommands} />
       </View>
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} onNewIn={props.onNewIn} onWorkspaceSettings={props.onWorkspaceSettings}
         onNewWorkspace={props.onNewWorkspace} />
@@ -409,7 +412,7 @@ function Sidebar(props: {
         <If when={!usesBrowserSession}>
           <ServerSwitch action={switching} />
         </If>
-        <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => props.onSettings()} />
+        <IconButton testID="open-settings" icon="settings" label={t("nav.settings")} onPress={() => props.onSettings()} />
       </View>
     </View>
   );
@@ -425,20 +428,20 @@ function ServerSwitch(props: { action: Action }) {
     const mine = (origin: string) => origin === thisServerOrigin();
     const rows = list.filter(item => !mine(item.origin)).map((item): MenuAction => ({
       label: displayOrigin(item.origin), icon: item.origin === current() ? "check" : "cloud", testID: `server-menu-${displayOrigin(item.origin)}`,
-      hint: item.origin === current() ? [item.account, "This server"].filter(Boolean).join(" · ") : item.account || undefined,
+      hint: item.origin === current() ? [item.account, t("server.this")].filter(Boolean).join(" · ") : item.account || undefined,
       onSelect: () => { if (item.origin !== untracked(current)) run(() => switchServer(item.origin)); },
     }));
     const here = mine(current());
     const local: MenuAction[] = hostsHere ? [{
-      label: `Pikibun on ${computerName}`, icon: here ? "check" : "database", testID: "server-menu-own",
-      hint: here ? (own() ? "This server" : "This server · not running in this app: choose it to start it") : own() ? "Running on this computer" : "Starts your own Pikibun on this computer",
+      label: t("server.own", { computer: computerName }), icon: here ? "check" : "database", testID: "server-menu-own",
+      hint: here ? (own() ? t("server.this") : t("server.own_stopped")) : own() ? t("server.own_running") : t("server.own_start"),
       onSelect: () => { if (untracked(own) !== untracked(current)) run(() => signInToThisServer({ switching: true })); },
     }] : [];
-    return [...local, ...rows, "separator", { label: "Add a server", icon: "plus", testID: "server-menu-add", onSelect: addServer }];
+    return [...local, ...rows, "separator", { label: t("server.add"), icon: "plus", testID: "server-menu-add", onSelect: addServer }];
   };
   return (
-    <DropdownMenu label="Switch server" placement="top" items={items()}
-      trigger={<IconButton testID="open-servers" icon="cloud" label="Switch server" onPress={() => undefined} />} />
+    <DropdownMenu label={t("server.switch")} placement="top" items={items()}
+      trigger={<IconButton testID="open-servers" icon="cloud" label={t("server.switch")} onPress={() => undefined} />} />
   );
 }
 
