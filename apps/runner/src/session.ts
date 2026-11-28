@@ -4,7 +4,7 @@ import { lstat, open, readFile, rm, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Message, type Models } from "@earendil-works/pi-ai";
 import { ConversationIdle, createRegistry, defineExtension, Harness, InboxDoc, UsageDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { ImageLimits } from "@earendil-works/pi-durable/tools";
@@ -166,7 +166,6 @@ export type RunnerConfig = {
   resolveModels?: (model: ModelDefinition) => Promise<{ models: Models; provider: string; modelId: string; thinkingLevel?: ThinkingLevel }>;
   readBackup?: (restore: RestoreDescriptor, targetSessionId: string) => Promise<Uint8Array>;
   compaction?: CompactionSettings;
-  identity?: ClientIdentity;
   portable?: { store: IdentityStore; detached?(sessionId: string): Promise<void> };
   repositoryCache?: RepositoryCache;
   buildCacheStore?: BuildCacheStore;
@@ -807,8 +806,7 @@ export class RunnerSession {
     this.#compaction = () => settings()?.compaction;
     const storage = await this.openStorage();
     try {
-      this.harness = await Harness.open(storage, { models, registry, settings,
-        ...(this.config.identity ? { identity: this.config.identity } : {}) }, context);
+      this.harness = await Harness.open(storage, { models, registry, settings }, context);
     }
     catch (error) { await storage.close(context); throw error; }
     this.#failed = false;

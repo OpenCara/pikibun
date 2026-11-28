@@ -33,7 +33,7 @@ An offline host's page in **Settings → Hosts** has **Reconnect**, which shows 
 
 ## Models
 
-A host offers the models matched by `enabledModels` in Pi's `settings.json` (the same patterns Pi uses for model cycling, such as `"anthropic/*"`), or every authenticated Pi model when that list is unset; `--model PROVIDER/MODEL` (repeatable) overrides both. A host offers at most 200 models. Each model starts at the reasoning level Pi gives it; see [Chat options](sessions.md#chat-options).
+A host offers the models matched by `enabledModels` in Pi's `settings.json` (the same patterns Pi uses for model cycling, such as `"anthropic/*"`), or every authenticated Pi model when that list is unset; `--model PROVIDER/MODEL` (repeatable) overrides both. A host offers at most 200 models. Each model starts at the reasoning level Pi gives it; see [Chat options](sessions.md#chat-options). If Pi's `models.json` is invalid (a typo such as `"contextWindow": "32000"`), the connector starts without that file's models and prints `Pi's models.json error:` with the reason, as Pi does.
 
 The host's owner and its [admins](#host-admins-and-host-command-grants) can also turn models off without touching the machine: under **Settings → Hosts →** the host **→ Models**, clear a model's **Enabled** box. Disabling a model applies to everyone who uses the host, the owner included, in every workspace, and takes effect at once:
 
@@ -45,16 +45,15 @@ The setting stays with the host until someone enables the model again, even if P
 
 A host can also offer the models a Pi extension provides (a proxy, a subscription bridge, a provider Pi doesn't ship): its owner installs the extension on the host, signs in to the provider with Pi there if it needs that, and ticks **Provide models** on it under **Settings → Hosts →** the host **→ Extensions**. The extension's code then runs in the connector, as the owner's OS user and outside any sandbox, which is why only the owner decides it and no workspace can; its models are narrowed by `enabledModels`, count in the 200, and are turned off here like the others. `pikibun connect --no-extension-models` refuses it on the machine. See [Models an extension provides](extensions.md#models-an-extension-provides).
 
-Sessions on a host also follow two more of its Pi settings:
+Sessions on a host also follow one more of its Pi settings:
 
 - **Compaction**: `compaction` (`enabled`, `reserveTokens`, `keepRecentTokens`) decides when a long conversation is summarized, and `compaction.modelOverrides` sets the token values per exact `provider/modelId`, so a session that switches between a small-window and a large-window model compacts in time for each. Pi's defaults apply where these are unset, with one exception: a reasoning model keeps a tenth of its context window, between 16K and 64K tokens, as `reserveTokens` instead of Pi's 16K. Pi summarizes at the conversation's reasoning level within 80% of `reserveTokens`, so at 16K a model thinking at a high level can spend the whole budget thinking, and once the context is past the threshold every message fails the same compaction. Set `reserveTokens` (overall or for the model) to use another value.
 
   Pi compacts on its own only near the model's context window, or when the provider says the context is too long. A gateway or proxy between the host and the provider can instead drop a large request's response stream without an error, which Pi reports as a stream that ended without a stop reason; every later message then sends the same request and fails the same way. So when a message fails like that after Pi's retries, and its conversation holds about 128K tokens or more, the host starts compacting the conversation (unless `compaction.enabled` is `false` for the model), and the transcript says so: send the message again once a summary of the conversation appears. The summary is a model request through the same gateway, so if it fails too, continue in a new session.
 
   The host's owner and its admins can also set these token counts in Pikibun, without touching the machine: under **Settings → Hosts →** the host **→ Compaction**, enter **Reserve** and **Keep recent** tokens for all models, or for single models under **Per model**. Each count set there replaces the one in the host's `settings.json`; an empty one keeps it. Sessions pick up a change within a minute, from their next message, without restarting the connector. This needs a connector from this release or later.
-- **Provider attribution**: with Pi's `enableInstallTelemetry` set to `false` (or `PI_TELEMETRY=0`), sessions' model requests carry no attribution headers to pi, as Pi's own don't.
 
-The connector reads these when it starts; restart it after changing them.
+The connector reads these when it starts; restart it after changing them. Sessions' model requests carry pi's attribution headers, as Pi's own do: Pi 1.7.0 removed `enableInstallTelemetry` and `PI_TELEMETRY`, which turned them off, so the connector ignores them too.
 
 ## Sharing a host
 

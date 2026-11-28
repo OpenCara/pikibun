@@ -86,7 +86,7 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
       if (source.lifetime.aborted) throw new Error("Connector has stopped");
       return options.localModels.resolve(model);
     },
-    compaction: options.localModels.compaction, identity: options.localModels.identity,
+    compaction: options.localModels.compaction,
     ...(source.identity ? { portable: { store: source.identity, detached: async (sessionId: string) => calls.reportDetached(await source.connection(), sessionId) } } : {}),
     ...(source.hostExtensions ? { extensions: runnerExtensions(source, source.hostExtensions) } : {}),
     ...(source.browser() ? { browser: () => source.browser()?.current(), browserStatus: () => source.browser()?.status() } : {}),
