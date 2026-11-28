@@ -167,7 +167,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   const sourceCount = () => (repositories.data() ? repositories.data()!.sources ?? repositories.data()!.repositories.length : null);
   const overview = () => (
     <>
-      <General workspace={workspace()} admin={admin()} role={role()} go={props.go} />
+      <General workspace={workspace()} admin={admin()} role={role()} />
       <If when={admin()}><Presets workspace={workspace()} /></If>
       <If when={canCreateSessions(role())}><Setup workspace={workspace()} admin={admin()} sourceCount={sourceCount()} go={props.go} addSource={() => tab.set("sources")} /></If>
       <Members workspace={workspace()} admin={admin()} owner={role() === "owner"} />
@@ -180,6 +180,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
             trailing={opensServerPages ? <Button small variant="outline" label="Export" onPress={() => openServerLink(`/api/workspaces/${segment(workspace().id)}/export`)} /> : undefined} />
         </Section>
       </If>
+      <DangerZone workspace={workspace()} role={role()} go={props.go} />
     </>
   );
   const sourcesTab = () => (
@@ -247,23 +248,9 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   );
 }
 
-function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceRole; go: SectionProps["go"] }) {
+function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceRole }) {
   const data = useAppData();
   const action = createAction();
-  const deletion = createAction();
-  const deletable = () => props.role === "owner" && !props.workspace.personal;
-  async function remove() {
-    if (deletion.busy() || !deletable()) return;
-    if (!await confirm({ title: `Delete ${props.workspace.name}?`, confirmLabel: "Delete workspace", destructive: true,
-      message: `Everyone in ${props.workspace.name}, you included, loses it at once: its sessions, settings, hosts and schedules. Nothing in it is erased, and you can restore it, with its members and sessions, from Deleted workspaces.` })) return;
-    const workspaceId = props.workspace.id;
-    const deleted = await deletion.run(async () => {
-      await session().api(`/api/workspaces/${segment(workspaceId)}`, { method: "DELETE" });
-    });
-    if (!deleted) return;
-    props.go({ name: "settings", section: "workspaces" });
-    void data.refreshWorkspaces();
-  }
   const renaming = signal(false);
   const name = signal("");
   const open = () => { action.clear(); name.set(props.workspace.name); renaming.set(true); };
@@ -286,12 +273,6 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
         </If>
       </>} />
       <Row title="Your role" trailing={<Badge tone={props.admin ? "success" : "neutral"}>{roleLabel[props.role]}</Badge>} />
-      <If when={deletable()}>
-        <Row title="Delete workspace" hint="Everyone loses it; you can restore it later"
-          trailing={<Button small variant="danger" icon="trash" label={deletion.busy() ? "Deleting…" : "Delete…"} testID="workspace-delete" disabled={deletion.busy()}
-            onPress={() => void remove()} />} />
-        <If when={deletion.error()}><CardBody><Feedback error={deletion.error()} /></CardBody></If>
-      </If>
       <If when={!renaming() && action.notice()}><CardBody><Feedback notice={action.notice()} /></CardBody></If>
       <FormSheet open={renaming()} title="Rename workspace" onClose={() => { if (!action.busy()) renaming.set(false); }} testID="rename-workspace-sheet"
         footer={<>
@@ -305,6 +286,34 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
         <Feedback error={action.error()} />
       </FormSheet>
     </Section>
+  );
+}
+
+function DangerZone(props: { workspace: Workspace; role: WorkspaceRole; go: SectionProps["go"] }) {
+  const data = useAppData();
+  const deletion = createAction();
+  const deletable = () => props.role === "owner" && !props.workspace.personal;
+  async function remove() {
+    if (deletion.busy() || !deletable()) return;
+    if (!await confirm({ title: `Delete ${props.workspace.name}?`, confirmLabel: "Delete workspace", destructive: true,
+      message: `Everyone in ${props.workspace.name}, you included, loses it at once: its sessions, settings, hosts and schedules. Nothing in it is erased, and you can restore it, with its members and sessions, from Deleted workspaces.` })) return;
+    const workspaceId = props.workspace.id;
+    const deleted = await deletion.run(async () => {
+      await session().api(`/api/workspaces/${segment(workspaceId)}`, { method: "DELETE" });
+    });
+    if (!deleted) return;
+    props.go({ name: "settings", section: "workspaces" });
+    void data.refreshWorkspaces();
+  }
+  return (
+    <If when={deletable()}>
+      <Section title="Danger zone" testID="workspace-danger">
+        <Row title="Delete workspace" hint="Everyone loses it; you can restore it later"
+          trailing={<Button small variant="danger" icon="trash" label={deletion.busy() ? "Deleting…" : "Delete…"} testID="workspace-delete" disabled={deletion.busy()}
+            onPress={() => void remove()} />} />
+        <If when={deletion.error()}><CardBody><Feedback error={deletion.error()} /></CardBody></If>
+      </Section>
+    </If>
   );
 }
 

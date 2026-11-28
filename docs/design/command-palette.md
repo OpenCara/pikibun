@@ -41,7 +41,11 @@ A command that needs a value asks for it in the palette, as Pine's `completing-r
 
 - **A choice**: the input filters a list of values, the current one checked (Model…, Reasoning…, Switch session…,
   New session in…, Workspaces…).
-- **A line of text**: one row offers what typing it does (**Rename to “…”**), starting from the current value.
+- **A line of text**: one row offers what typing it does (**Rename to “…”**, **Open session “…”**), starting from the
+  current value.
+
+A session's ID or link typed or pasted with no command chosen offers **Open session …** above the matches, so the
+palette is where **Open by ID** lives (see [the app's layout](app-layout.md)).
 
 Pine's third interface, the transient (several arguments and actions with letters), isn't here: Pikibun's commands
 with several arguments, such as a new session, keep their own pages.
@@ -59,9 +63,10 @@ every engine NSH has.
 ## Keys and touch
 
 `mod+k` (Command on Apple's platforms, Control elsewhere) opens the palette, and `mod+o` opens Switch session…
-directly, as Pine binds them; a command's `binding` is bound by the shell for as long as some screen contributes it.
-Both keep a modifier, so typing in the chat box never fires one. On touch screens the session's header has a button
-for it and the phone's session list has one too; the sidebar has **Commands** on wider windows. The input takes the
+directly, as Pine binds them; `mod+shift+o` runs New session and `mod+,` Settings. A command's `binding` is bound by
+the shell for as long as some screen contributes it, and the palette and buttons' tooltips show it. All keep a
+modifier, so typing in the chat box never fires one. Wider windows have a button for the palette in the main pane's
+toolbar; on a phone the session's header has one and the session list has one too. The input takes the
 keyboard focus only where NSH reports desktop behavior (`platform.desktop`), so a phone's keyboard doesn't cover the
 list until the input is tapped; the key hints show only there too.
 

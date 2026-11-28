@@ -17,7 +17,8 @@ The desktop apps (macOS, Windows, Linux) settle two things here:
 `settingsSections` (`apps/nsh/src/settings/index.tsx`) gives each section a `scope`: `server` or `device`. The list
 draws one group per scope under its own heading: the server's address (`pikibun.com`) above the server's sections,
 and **This Mac** (**This Computer** on Windows and Linux, **This device** on phones, tablets and the web) above the
-device's.
+device's. On wider windows the list is Settings' own sidebar, and each page is titled with its set's heading: see
+[the app's layout](app-layout.md#settings).
 
 | Set | Sections |
 | --- | --- |

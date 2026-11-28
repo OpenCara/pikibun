@@ -1188,6 +1188,8 @@ describe("settings", () => {
     expect(app.shows("id:deleted-workspaces")).toBe(false);
     await app.press("id:workspace-w2");
     await app.waitFor("id:workspace-delete");
+    expect(app.texts().indexOf("Danger zone")).toBeGreaterThan(app.texts().indexOf("Members"));
+    expect(app.texts().indexOf("Members")).toBeGreaterThan(app.texts().indexOf("General"));
 
     app.onDialog(dialog => (dialog.title === "Delete Difference Engine?" ? "Cancel" : null));
     await app.press("id:workspace-delete");

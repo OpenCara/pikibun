@@ -49,11 +49,17 @@ sign-in screen lists them.
 Quiet chrome in the manner of today's coding-agent apps (Codex, Claude Code, Lody, Paseo), so the conversation and what
 needs a decision stand out:
 
-- **Layout**: wider windows have a sidebar (a new session, every session by workspace, the signed-in person, the
-  server switch and settings) beside the open session; with none open, the home asks "What should we work on?" with the chat box that
+- **Layout**: wider windows have a sidebar of the sessions (a search, every session by workspace, and at its foot the
+  signed-in person, the server switch and settings) beside the main pane, whose toolbar at its top left has **New
+  session**, **All sessions** and **Commands**, over the home and at the start of a session's header; with no session
+  open, the home asks "What should we work on?" with the chat box that
   starts one: in the box what the first message runs with (model, reasoning, access), under it one quiet row of where
   the session lives (workspace, host, sandbox, visibility), and alerts only when something needs a decision. Phones
-  stack the session list, then the session.
+  stack the session list, then the session. See [the design](../../docs/design/app-layout.md), after Paseo and Orca.
+- **Settings**: on wider windows they take the sidebar's place, headed **Back to app**, with a search over every
+  section, setting and workspace's settings (`src/settings/search.ts`), each workspace listed under Workspaces, and
+  the page titled with its section; phones list the sections, with the same search, and open each as a page.
+  Ctrl/⌘ , opens them.
 - **Session**: a header with where the session lives and runs and its connection; the transcript in one readable column,
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   the chat box's pickers (shared or side ask, model, reasoning, access)
@@ -62,8 +68,9 @@ needs a decision stand out:
   [slash commands](../../docs/sessions.md#slash-commands) inside the box, above the text. On macOS and Linux, typing
   while the transcript or a button has the keyboard goes into the chat box (NSH's `captureKeys="text"`), except while a
   sudo prompt shows: NSH moves the typing into the first input it finds, which would be the prompt's password field. Details (owner, host, visibility, ID) are in the session's panel.
-- **Commands**: the [command palette](../../docs/sessions.md#command-palette) (Ctrl/⌘ K, Ctrl/⌘ O for Switch session…, a
-  button in the session's header) lists every action by name. Screens contribute their commands as data to one
+- **Commands**: the [command palette](../../docs/sessions.md#command-palette) (Ctrl/⌘ K, Ctrl/⌘ O for Switch session…,
+  Ctrl/⌘ Shift O for New session, the main toolbar's button) lists every action by name, and opens a session's ID or
+  link pasted into it. Screens contribute their commands as data to one
   registry (`src/lib/commands.ts`, `useCommands`) while they are in front, and `src/components/CommandPalette.tsx`
   draws them all: a dialog on wider windows, a sheet on phones, with choices and a line of text asked in the same box.
   The matcher is `packages/client/src/command-palette.ts`; see [the design](../../docs/design/command-palette.md).

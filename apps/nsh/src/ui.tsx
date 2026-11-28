@@ -206,7 +206,7 @@ export function Row(props: { title: string; hint?: JSX.Element; leading?: JSX.El
       </If>
     </>
   );
-  const style = (): ViewStyle => ({ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 12, minHeight: 52, paddingVertical: 12, paddingHorizontal: 16,
+  const style = (): ViewStyle => ({ flexDirection: "row", flexWrap: "wrap", alignItems: "center", alignContent: "center", gap: 12, minHeight: 52, paddingVertical: 12, paddingHorizontal: 16,
     borderTopWidth: 1, borderColor: palette().border });
   return (
     <If when={props.onPress} else={<View testID={props.testID} style={style()}>{body()}</View>}>

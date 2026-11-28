@@ -145,7 +145,7 @@ function Shell() {
   }
   function go(route: PageRoute) {
     switch (route.name) {
-      case "home": nav.popToRoot(); break;
+      case "home": nav.popToRoot(); selected.set(null); break;
       case "sessions": nav.popToRoot(); nav.push({ name: "all-sessions" }); break;
       case "session": nav.popToRoot(); openSession(route.sessionId); break;
       case "new": nav.popToRoot(); startNew(route.workspaceId); break;
