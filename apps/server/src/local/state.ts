@@ -4,6 +4,7 @@ import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { acquireRunnerLease, RunnerLeaseBusyError } from '../../../runner/src/lease.js';
+import { LISTEN_LOOPBACK, listenError } from './listen.js';
 
 export const defaultLocalStateDir = (): string => join(homedir(), '.local', 'share', 'pikibun', 'server');
 export const DEFAULT_LOCAL_PORT = 7878;
@@ -19,7 +20,6 @@ export interface GitHubOAuthApp { clientId: string; clientSecret: string }
 
 export interface SharedConfig {
   origin: string;
-  listen: 'loopback' | 'all';
   trustProxy: boolean;
   signup: 'open' | 'invite' | 'off';
   passwordAuth: boolean;
@@ -33,6 +33,7 @@ export interface LocalState {
   vaultKey: string;
   claimSecret: string;
   port: number;
+  listen?: string[];
   shared?: SharedConfig;
   owner?: string;
   sharedOnce?: true;
@@ -71,7 +72,7 @@ export function sharedConfigError(value: unknown): string | undefined {
   const origin = sharedOrigin(config.origin);
   if (!origin.ok) return origin.error;
   if (origin.origin !== config.origin) return 'Enter only the origin, without a path, such as https://pikibun.example.com.';
-  if (config.listen !== 'loopback' && config.listen !== 'all') return 'Choose where Pikibun listens: this computer only, or every network interface.';
+  if (config.listen !== undefined && config.listen !== 'loopback' && config.listen !== 'all') return 'The sharing settings are damaged.';
   if (typeof config.trustProxy !== 'boolean' || typeof config.passwordAuth !== 'boolean') return 'The sharing settings are damaged.';
   if (!SIGNUPS.includes(config.signup as SharedConfig['signup'])) return 'Choose who may create an account: anyone, invite links only, or nobody new.';
   if (!Array.isArray(config.admins) || config.admins.length < 1 || config.admins.length > 20) return 'Name at least one administrator (at most 20).';
@@ -84,19 +85,21 @@ export function sharedConfigError(value: unknown): string | undefined {
 }
 
 function copyShared(config: SharedConfig): SharedConfig {
-  return { origin: config.origin, listen: config.listen, trustProxy: config.trustProxy, signup: config.signup, passwordAuth: config.passwordAuth,
+  return { origin: config.origin, trustProxy: config.trustProxy, signup: config.signup, passwordAuth: config.passwordAuth,
     admins: [...config.admins], ...(config.github ? { github: { clientId: config.github.clientId, clientSecret: config.github.clientSecret } } : {}) };
 }
 
 function parseState(value: unknown): LocalState {
   const state = value as Partial<LocalState> | null;
   if (!state || typeof state !== 'object' || state.version !== 1 || ![state.sessionSecret, state.vaultKey, state.claimSecret].every(item => typeof item === 'string' && SECRET.test(item))
-    || !validPort(state.port) || (state.shared !== undefined && sharedConfigError(state.shared) !== undefined)
+    || !validPort(state.port) || (state.listen !== undefined && listenError(state.listen) !== undefined)
+    || (state.shared !== undefined && sharedConfigError(state.shared) !== undefined)
     || (state.owner !== undefined && (typeof state.owner !== 'string' || !OWNER_ID.test(state.owner))) || (state.sharedOnce !== undefined && state.sharedOnce !== true)) {
     throw new LocalStateError('The local server state is damaged or from another version.');
   }
+  const listen = state.listen ?? ((state.shared as { listen?: unknown } | undefined)?.listen === 'loopback' ? [LISTEN_LOOPBACK] : undefined);
   return { version: 1, sessionSecret: state.sessionSecret!, vaultKey: state.vaultKey!, claimSecret: state.claimSecret!, port: state.port!,
-    ...(state.shared ? { shared: copyShared(state.shared) } : {}), ...(state.owner ? { owner: state.owner } : {}),
+    ...(listen ? { listen: [...listen] } : {}), ...(state.shared ? { shared: copyShared(state.shared) } : {}), ...(state.owner ? { owner: state.owner } : {}),
     ...(state.sharedOnce ? { sharedOnce: true as const } : {}) };
 }
 
@@ -149,11 +152,14 @@ async function lease(directory: string): Promise<() => Promise<void>> {
 
 export interface LocalStateChanges {
   port?: number;
+  listen?: string[];
   shared?: SharedConfig;
 }
 
 function changed(state: LocalState | undefined, changes: LocalStateChanges): LocalState {
   if (changes.port !== undefined && !validPort(changes.port)) throw new LocalStateError('The port must be a number from 1024 to 65535.');
+  const listenProblem = changes.listen === undefined ? undefined : listenError(changes.listen);
+  if (listenProblem) throw new LocalStateError(listenProblem);
   const base: LocalState = state ?? { version: 1, sessionSecret: secret(), vaultKey: secret(), claimSecret: secret(), port: DEFAULT_LOCAL_PORT };
   let shared = base.shared;
   if (changes.shared) {
@@ -165,7 +171,7 @@ function changed(state: LocalState | undefined, changes: LocalStateChanges): Loc
     if (error) throw new LocalStateError(error);
     shared = copyShared(candidate as unknown as SharedConfig);
   }
-  return { ...base, ...(changes.port ? { port: changes.port } : {}), ...(shared ? { shared } : {}) };
+  return { ...base, ...(changes.port ? { port: changes.port } : {}), ...(changes.listen ? { listen: [...changes.listen] } : {}), ...(shared ? { shared } : {}) };
 }
 
 export async function peekLocalState(directory: string): Promise<LocalState | undefined> {

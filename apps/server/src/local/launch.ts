@@ -13,6 +13,7 @@ import { startServer } from '../serve.js';
 import { webBuild } from '../static.js';
 import type { Env } from '../types.js';
 import { removeDiscovery, writeDiscovery } from './discovery.js';
+import { DEFAULT_LISTEN, listenUrl, resolveListen } from './listen.js';
 import { recordLocalOwnership, type LocalState } from './state.js';
 
 export const LOCAL_ORIGIN_HOST = '127.0.0.1';
@@ -46,6 +47,7 @@ export interface LocalServer {
   readonly mode: LocalServerMode;
   readonly origin: string;
   readonly address: string;
+  readonly listening: readonly string[];
   readonly env: Env;
   owner(): Promise<{ id: string } | null>;
   signInUrl(): string | null;
@@ -71,10 +73,11 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   const shared = mode === 'shared' ? state.shared : undefined;
   if (mode === 'shared' && !shared) throw new LocalServerError('Set up sharing first: its public HTTPS address, sign-in and administrators.');
   if (mode === 'shared' && options.headless) throw new LocalServerError('A shared Pikibun runs from `pikibun serve --share`, not headless.');
-  const listenHost = shared?.listen === 'all' ? '0.0.0.0' : LOCAL_ORIGIN_HOST;
+  const listen = resolveListen(state.listen ?? DEFAULT_LISTEN);
+  if (!listen.ok) throw new LocalServerError(listen.error);
   const origin = shared ? shared.origin : `http://${LOCAL_ORIGIN_HOST}:${state.port}`;
   const common: Record<string, string> = {
-    APP_ORIGIN: origin, HOST: listenHost, PORT: String(state.port),
+    APP_ORIGIN: origin, HOST: listen.addresses.join(','), PORT: String(state.port),
     DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STORAGE_URL: pathToFileURL(backups).href, ...(staticDir ? { STATIC_DIR: staticDir } : {}),
     SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
   };
@@ -104,6 +107,9 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE' || error instanceof InstanceLockedError) {
       throw new LocalServerError(`Port ${state.port} is in use: another Pikibun may already be running here. Stop it, or choose another port with --port.`);
     }
+    if ((error as NodeJS.ErrnoException).code === 'EADDRNOTAVAIL') {
+      throw new LocalServerError(`Pikibun can't listen on ${listen.addresses.filter(address => address !== LOCAL_ORIGIN_HOST).join(', ')}: this computer has no such address. Choose its network interfaces with --listen.`);
+    }
     throw error;
   }
   const { env } = config;
@@ -118,7 +124,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
     }
   }
   return {
-    mode, origin, env, address: `http://${listenHost}:${state.port}`,
+    mode, origin, env, address: listenUrl(LOCAL_ORIGIN_HOST, state.port), listening: listen.addresses.map(address => listenUrl(address, state.port)),
     async owner() {
       if (!shared) return localOwner(env);
       if (!admins.length) return null;

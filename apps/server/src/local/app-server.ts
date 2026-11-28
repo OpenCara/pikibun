@@ -12,11 +12,12 @@ import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
 import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, peekLocalState } from './state.js';
 import { openLocalStateTakingOver } from './discovery.js';
+import { DEFAULT_LISTEN, describeListen, interfaceChoices, listenError } from './listen.js';
 
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const requestSchema: z.ZodType<ServerRequest> = z.discriminatedUnion('type', [
   z.object({ type: z.literal('inspect'), id: requestId }).strict(),
-  z.object({ type: z.literal('start'), id: requestId, unsandboxedConsent: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('start'), id: requestId, unsandboxedConsent: z.boolean().optional(), listen: z.array(z.string().max(64)).max(16).optional() }).strict(),
   z.object({ type: z.literal('stop'), id: requestId }).strict(),
 ]);
 
@@ -47,7 +48,8 @@ function status(): void {
   const current = running;
   if (!current) { emit({ type: 'status', state: 'stopped', host: 'off' }); return; }
   const token = signInToken(current.server);
-  const update: ServerStatus = { state: current.stopping ? 'stopping' : 'running', origin: current.server.origin, host: current.hostState, ...(token ? { signInToken: token } : {}) };
+  const update: ServerStatus = { state: current.stopping ? 'stopping' : 'running', origin: current.server.origin, listening: [...current.server.listening],
+    host: current.hostState, ...(token ? { signInToken: token } : {}) };
   emit({ type: 'status', ...update });
 }
 
@@ -67,7 +69,7 @@ async function inspect(): Promise<ServerInspection> {
   const state = await peekLocalState(stateDir);
   const host = await hostCheck();
   return {
-    stateDir, port: state?.port ?? DEFAULT_LOCAL_PORT, hostMode: host.mode,
+    stateDir, port: state?.port ?? DEFAULT_LOCAL_PORT, listen: [...state?.listen ?? DEFAULT_LISTEN], interfaces: interfaceChoices(), hostMode: host.mode,
     ...(host.mode === 'unsandboxed' ? { unsandboxedWarning: appUnsandboxedWarning() } : {}),
     ...(host.problem ? { hostProblem: host.problem } : {}),
   };
@@ -81,12 +83,14 @@ async function start(request: ServerStartRequest): Promise<void> {
 }
 
 async function launch(request: ServerStartRequest): Promise<void> {
-  const { state, release } = await openLocalStateTakingOver(stateDir);
+  const listenProblem = request.listen === undefined ? undefined : listenError(request.listen);
+  if (listenProblem) throw new ServerFailure(listenProblem);
+  const { state, release } = await openLocalStateTakingOver(stateDir, request.listen ? { listen: request.listen } : {});
   const host = await hostCheck().catch(async (error: unknown) => { await release(); throw error; });
   const server = await startLocalServer({ stateDir, state, release, mode: 'local', ...(staticDir ? { staticDir } : {}) });
   const current: Running = { server, hostState: 'off', stopping: false };
   running = current;
-  log('info', `Pikibun is running at ${server.origin}, reachable from this computer only.`);
+  log('info', `Pikibun is running at ${server.origin}, listening on ${server.listening.join(', ')} (${describeListen(state.listen ?? DEFAULT_LISTEN)}).`);
   const unsandboxed = host.mode === 'unsandboxed';
   if (host.problem || !host.models || (unsandboxed && request.unsandboxedConsent !== true)) {
     log('warning', host.problem || !host.models ? `This computer can't run sessions yet: ${host.problem ?? 'Pi has no models.'} Start Pikibun again once that is fixed.`
