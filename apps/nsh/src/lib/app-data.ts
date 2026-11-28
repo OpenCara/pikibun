@@ -1,10 +1,12 @@
-import { computed, context, effect, signal, Storage, type Accessor } from "nsh";
+import { computed, context, effect, signal, Storage, untracked, type Accessor } from "nsh";
 import {
   chatPreference, parseChatPreference, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
   type SessionRecord, type Workspace,
 } from "../shared";
+import { session } from "./auth";
 import { rememberLocalSessions } from "./local-sessions";
 import { createResource } from "./resource";
+import { orderWorkspaces } from "./workspace-order";
 
 const LAST_CHAT_KEY = "pikibun.lastChat";
 const LAST_AUTO_KEY = "pikibun.lastAuto";
@@ -60,6 +62,7 @@ export interface AppData {
   workspacesLoading: Accessor<boolean>;
   workspacesError: Accessor<string>;
   refreshWorkspaces: () => Promise<void>;
+  reorderWorkspaces: (ids: readonly string[]) => Promise<void>;
   lastWorkspaceId: Accessor<string>;
   setLastWorkspaceId: (id: string) => void;
   lastChat: Accessor<ChatPreference | undefined>;
@@ -82,6 +85,13 @@ export function createAppData(): AppData {
   let working: Accessor<boolean> = () => false;
   const sessions = createResource<{ sessions: SessionRecord[] }>(() => "/api/sessions", () => (working() ? 10_000 : 30_000));
   const workspaces = createResource<{ workspaces: Workspace[] }>(() => "/api/workspaces");
+  const pendingOrder = signal<readonly string[] | null>(null);
+  const listedWorkspaces = computed(() => {
+    const list = workspaces.data()?.workspaces ?? [];
+    const order = pendingOrder();
+    return order ? orderWorkspaces(list, order) : list;
+  });
+  let reorders = 0;
   effect(() => rememberLocalSessions(sessions.data()?.sessions ?? []));
   const sorted = computed(() => [...(sessions.data()?.sessions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   working = computed(() => liveActivity()?.activity === "working"
@@ -100,10 +110,20 @@ export function createAppData(): AppData {
     sessionsLoading: () => sessions.loading() && !sessions.data(),
     sessionsError: sessions.error,
     refreshSessions: sessions.refresh,
-    workspaces: () => workspaces.data()?.workspaces ?? [],
+    workspaces: listedWorkspaces,
     workspacesLoading: () => workspaces.loading() && !workspaces.data(),
     workspacesError: workspaces.error,
     refreshWorkspaces: workspaces.refresh,
+    async reorderWorkspaces(ids) {
+      const reorder = ++reorders;
+      pendingOrder.set([...ids]);
+      try {
+        const result = await untracked(session).api<{ workspaces: Workspace[] }>("/api/workspaces/order", { method: "PUT", body: { workspaceIds: ids } });
+        if (reorder === reorders) workspaces.replace(result);
+      } finally {
+        if (reorder === reorders) pendingOrder.set(null);
+      }
+    },
     lastWorkspaceId,
     setLastWorkspaceId: id => lastWorkspaceId.set(id),
     lastChat,

@@ -9,6 +9,7 @@ export interface Resource<T> {
   loading: Accessor<boolean>;
   error: Accessor<string>;
   refresh: () => Promise<void>;
+  replace: (value: T) => void;
 }
 
 export function createResource<T>(path: Accessor<string | null>, pollMs?: Accessor<number | undefined> | number): Resource<T> {
@@ -72,6 +73,7 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
       waiting.push({ revision: next, done });
       revision.set(next);
     }),
+    replace: value => { data.set(value); error.set(""); },
   };
 }
 

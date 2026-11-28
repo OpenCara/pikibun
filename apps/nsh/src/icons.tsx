@@ -14,6 +14,7 @@ const outlines = {
   "chevron-right": "M9 18l6-6-6-6",
   "chevron-down": "M6 9l6 6 6-6",
   "chevron-up": "M18 15l-6-6-6 6",
+  "grip-vertical": [9, 15].flatMap(x => [5, 12, 19].map(y => circle(x, y, 1))).join(""),
   "arrow-up": "M5 12l7-7 7 7M12 19V5",
   "shield-check": `${shield}M9 12l2 2 4-4`,
   "shield-alert": `${shield}M12 8v4M12 16h.01`,

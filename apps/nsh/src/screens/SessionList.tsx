@@ -1,4 +1,4 @@
-import { computed, List, signal, Text, untracked, View } from "nsh";
+import { cleanup, computed, createAnimatedValue, List, signal, Text, untracked, View, type AnimatedValue, type PanEvent, type ViewRef } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
 import { writeClipboard } from "../lib/clipboard";
 import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord, type SideAskSummary } from "../shared";
@@ -6,6 +6,7 @@ import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../compone
 import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
 import { stableRows } from "../lib/stable-rows";
+import { dropAt, dropIndex, movableIds, moveBy, type HeaderPlace } from "../lib/workspace-order";
 import { session } from "../lib/auth";
 import { type Action } from "../lib/resource";
 import { Icon } from "../icons";
@@ -97,6 +98,51 @@ export function SessionList(props: {
   });
   const keep = stableRows<Row>();
   const rows = computed<Row[]>(() => keep(groupedRows()));
+  const order = computed(() => (query().trim() ? [] : movableIds(data.workspaces())));
+  const headers = new Map<string, ViewRef>();
+  const dragging = signal<string | null>(null);
+  const landing = signal<number | null>(null);
+  let places: Promise<HeaderPlace[]> = Promise.resolve([]);
+  let watch: ReturnType<typeof setInterval> | undefined;
+  cleanup(() => clearInterval(watch));
+  const reorder = (next: string[] | null) => { if (next) void menu.action.run(() => data.reorderWorkspaces(next)); };
+  const header = (id: string, ref: ViewRef | null) => { if (ref) headers.set(id, ref); else headers.delete(id); };
+  const measure = async (): Promise<HeaderPlace[]> => {
+    const found = await Promise.all(untracked(order).map(async id => {
+      const place = await headers.get(id)?.measure().catch(() => null);
+      return place ? { id, top: place.pagePosition.y, height: place.bounds.size.height } : null;
+    }));
+    return found.filter((place): place is HeaderPlace => place !== null);
+  };
+  const drag: WorkspaceDrag = {
+    start(id, value, event) {
+      dragging.set(id);
+      landing.set(null);
+      places = measure();
+      clearInterval(watch);
+      watch = setInterval(() => {
+        void Promise.all([places, value.getValue()]).then(([found, moved]) => {
+          if (untracked(dragging) === id) landing.set(dropIndex(untracked(order), id, found, event.origin.y + moved));
+        }, () => undefined);
+      }, 80);
+    },
+    async end(id, event) {
+      clearInterval(watch);
+      const found = await places;
+      dragging.set(null);
+      landing.set(null);
+      if (event.cancelled) return;
+      const ids = untracked(order);
+      reorder(dropAt(ids, id, dropIndex(ids, id, found, event.origin.y + event.translation.y)));
+    },
+  };
+  const dropLine = computed(() => {
+    const dragged = dragging();
+    const at = landing();
+    if (!dragged || at === null || !dropAt(order(), dragged, at)) return null;
+    return order().filter(id => id !== dragged)[at] ?? "end";
+  });
+  const move = (id: string, step: number) => reorder(moveBy(untracked(order), id, step));
   const flip = (id: string) => (current: readonly string[]) => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
   const toggle = (id: string) => collapsed.update(flip(id));
   const toggleArchived = (id: string) => {
@@ -136,6 +182,9 @@ export function SessionList(props: {
         )}
         footer={() => (
           <View style={{ paddingHorizontal: inset(), paddingTop: 12, gap: 2 }}>
+            <If when={dropLine() === "end"}>
+              <View testID="workspace-drop-line" style={{ height: 2, borderRadius: 1, marginTop: -8, marginBottom: 6, backgroundColor: palette().tones.info.text }} />
+            </If>
             <If when={props.onNewWorkspace && data.workspaces().length > 0}>
               <BaseButton testID="sidebar-new-workspace" accessibilityLabel="New workspace" onPress={() => props.onNewWorkspace?.()}
                 style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, minHeight: 34, borderRadius: radius.medium }}
@@ -170,7 +219,9 @@ export function SessionList(props: {
                 <If when={row().kind === "start" ? row() as Extract<Row, { kind: "start" }> : null}
                   else={
                     <WorkspaceRow row={row() as Extract<Row, { kind: "workspace" }>} collapsed={collapsed().includes((row() as Extract<Row, { kind: "workspace" }>).id)}
-                      onToggle={toggle} onToggleArchived={toggleArchived} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} action={menu.action} />
+                      onToggle={toggle} onToggleArchived={toggleArchived} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} action={menu.action}
+                      order={order()} dragging={dragging() === (row() as Extract<Row, { kind: "workspace" }>).id}
+                      dropLine={dropLine() === (row() as Extract<Row, { kind: "workspace" }>).id} drag={drag} onHeader={header} onMove={move} />
                   }>
                   {start => (
                     <BaseButton testID={`workspace-start-${start().workspaceId}`} accessibilityLabel="Start a session" onPress={() => props.onNewIn?.(start().workspaceId)}
@@ -202,13 +253,31 @@ export function SessionList(props: {
   );
 }
 
+interface WorkspaceDrag {
+  start: (id: string, value: AnimatedValue, event: PanEvent) => void;
+  end: (id: string, event: PanEvent) => void;
+}
+
 function WorkspaceRow(props: {
   row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; onToggleArchived: (id: string) => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void; action: Action;
+  order: readonly string[]; dragging: boolean; dropLine: boolean; drag: WorkspaceDrag; onHeader: (id: string, ref: ViewRef | null) => void;
+  onMove: (id: string, step: number) => void;
 }) {
+  const y = createAnimatedValue(0);
+  const registered = props.row.id;
+  cleanup(() => props.onHeader(registered, null));
+  const index = () => props.order.indexOf(props.row.id);
+  const movable = () => index() >= 0 && props.order.length > 1;
+  const wholeRow = () => movable() && !swipesRows;
+  const start = (event: PanEvent) => { if (movable()) props.drag.start(props.row.id, y, event); };
+  const end = (event: PanEvent) => { y.set(0); if (movable()) props.drag.end(props.row.id, event); };
   const options = (): (MenuAction | "separator")[] => [
     ...(props.row.canCreate && props.onNewIn ? [{ label: "New session", icon: "plus" as const, testID: `workspace-menu-new-${props.row.id}`, onSelect: () => props.onNewIn!(props.row.id) }] : []),
     { label: props.collapsed ? "Expand" : "Collapse", icon: props.collapsed ? "chevron-down" : "chevron-up", testID: `workspace-fold-${props.row.id}`, onSelect: () => props.onToggle(props.row.id) },
+    ...(movable() && index() > 0 ? [{ label: "Move up", icon: "arrow-up" as const, testID: `workspace-move-up-${props.row.id}`, onSelect: () => props.onMove(props.row.id, -1) }] : []),
+    ...(movable() && index() < props.order.length - 1
+      ? [{ label: "Move down", icon: "arrow-down" as const, testID: `workspace-move-down-${props.row.id}`, onSelect: () => props.onMove(props.row.id, 1) }] : []),
     ...(props.row.archived > 0 ? [{ label: props.row.showArchived ? "Hide archived" : `Show archived (${props.row.archived})`, icon: "archive" as const,
       testID: `workspace-archived-${props.row.id}`, onSelect: () => props.onToggleArchived(props.row.id) }] : []),
     "separator",
@@ -217,7 +286,13 @@ function WorkspaceRow(props: {
   ];
   return (
     <RowMenu items={options} testID={`workspace-menu-${props.row.id}`}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8 }}>
+      <View ref={ref => props.onHeader(registered, ref)} testID={`workspace-header-${props.row.id}`} pan={wholeRow() ? { y } : undefined}
+        panActivation={{ activeOffsetY: 6, failOffsetX: 24 }} onPanStart={start} onPanEnd={end}
+        style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8, borderRadius: radius.medium, zIndex: props.dragging ? 1 : 0, opacity: props.dragging ? 0.85 : 1,
+          backgroundColor: props.dragging ? palette().surface : "transparent", transform: [{ translateY: movable() ? y : 0 }] }}>
+        <If when={props.dropLine}>
+          <View testID="workspace-drop-line" style={{ position: "absolute", top: -5, left: 0, right: 0, height: 2, borderRadius: 1, backgroundColor: palette().tones.info.text }} />
+        </If>
         <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={rowPress(() => props.onToggle(props.row.id))}
           style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingHorizontal: 8, paddingVertical: 6,
             borderRadius: radius.medium }}
@@ -232,6 +307,13 @@ function WorkspaceRow(props: {
           <IconButton testID={`workspace-new-${props.row.id}`} icon="plus" label={`New session in ${props.row.title}`} size={28} onPress={() => props.onNewIn!(props.row.id)} />
         </If>
         <DropdownMenu label={`${props.row.title} options`} testID={`workspace-options-${props.row.id}`} items={options()} />
+        <If when={movable() && swipesRows}>
+          <View testID={`workspace-drag-${props.row.id}`} accessibilityLabel={`Drag to reorder ${props.row.title}`} pan={{ y }}
+            panActivation={{ activeOffsetY: 4, failOffsetX: 24 }} onPanStart={start} onPanEnd={end}
+            style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
+            <Icon name="grip-vertical" size={14} color={palette().faint} />
+          </View>
+        </If>
       </View>
     </RowMenu>
   );
