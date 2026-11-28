@@ -96,6 +96,7 @@ export function createAppData(): AppData {
     return Object.keys(hiding).length ? ordered.map(item => (item.id in hiding ? { ...item, hidden: hiding[item.id] } : item)) : ordered;
   });
   let writes = 0;
+  let writing: Promise<unknown> = Promise.resolve();
   effect(() => rememberLocalSessions(sessions.data()?.sessions ?? []));
   const sorted = computed(() => [...(sessions.data()?.sessions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   working = computed(() => liveActivity()?.activity === "working"
@@ -104,15 +105,18 @@ export function createAppData(): AppData {
   async function writeWorkspaces(path: string, body: Record<string, unknown>): Promise<void> {
     const write = ++writes;
     const settle = () => { pendingOrder.set(null); pendingHidden.set({}); };
+    const sent = writing.then(() => untracked(session).api<{ workspaces: Workspace[] }>(path, { method: "PUT", body }));
+    writing = sent.catch(() => undefined);
     try {
-      const result = await untracked(session).api<{ workspaces: Workspace[] }>(path, { method: "PUT", body });
+      const result = await sent;
       if (write !== writes) return;
       workspaces.replace(result);
       settle();
     } catch (reason) {
-      if (write !== writes) return;
-      settle();
-      void workspaces.refresh();
+      if (write === writes) {
+        settle();
+        void workspaces.refresh();
+      }
       throw reason;
     }
   }

@@ -129,18 +129,21 @@ describe("reordering workspaces", () => {
 describe("hiding workspaces", () => {
   const hides = (app: App) => app.requests().filter(item => item.method === "PUT" && item.url.endsWith("/hidden"))
     .map(item => ({ id: item.url.split("/").at(-2), hidden: JSON.parse(item.body ?? "{}").hidden as boolean }));
-  const hiding = (start: readonly string[] = [], answer?: (count: number) => Record<string, unknown> | undefined,
-    order: (request: Request) => Record<string, unknown> = saved) => {
+  const hiding = (start: readonly string[] = [], answer?: (count: number) => Record<string, unknown> | undefined, delay = 0) => {
     let hidden = new Set(start);
+    let order = listed.filter(item => item.id !== personal.id).map(item => item.id);
     let count = 0;
-    const current = () => listed.map(item => (hidden.has(item.id) ? { ...item, hidden: true } : item));
+    const current = () => [personal, ...order.map(id => listed.find(item => item.id === id)!)].map(item => (hidden.has(item.id) ? { ...item, hidden: true } : item));
     return server({
       [`GET ${ORIGIN}/api/workspaces`]: () => ({ body: { workspaces: current() } }),
       [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [
         { ...sessionRecord, id: "s-loom", workspaceId: "w3", title: "Weave the pattern" },
         { ...sessionRecord, id: "s-engine", workspaceId: "w1", title: "Compute the table" },
       ] } },
-      [`PUT ${ORIGIN}/api/workspaces/order`]: order,
+      [`PUT ${ORIGIN}/api/workspaces/order`]: (request: Request) => {
+        order = JSON.parse(request.body ?? "{}").workspaceIds as string[];
+        return { body: { workspaces: current() }, ...(delay ? { delay } : {}) };
+      },
       ...Object.fromEntries(listed.map(item => [`PUT ${ORIGIN}/api/workspaces/${item.id}/hidden`, (request: Request) => {
         const refused = answer?.(++count);
         if (refused) return refused;
@@ -199,16 +202,20 @@ describe("hiding workspaces", () => {
     expect(orders(app)[0]).toEqual(["w3", "w2", "w1"]);
   });
 
-  test("a slow move's answer, older than a hide made after it, doesn't bring the hidden workspace back", async () => {
-    const app = await open("../App.tsx", { network: hiding([], undefined, request => ({ ...saved(request), delay: 600 })), ...desktop });
+  test("a hide made while a move is saving waits for it, and keeps both the move and the hide", async () => {
+    const app = await open("../App.tsx", { network: hiding([], undefined, 600), ...desktop });
     await app.waitFor("id:workspace-options-w1");
     await app.press("id:workspace-options-w1");
     await app.press("id:workspace-move-down-w1");
     await app.press("id:workspace-options-w3");
     await app.press("id:workspace-hide-w3");
-    await app.waitUntil(() => hides(app).length === 1 && !app.shows("id:workspace-row-w3"));
-    await app.wait(800);
+    await app.waitUntil(() => !app.shows("id:workspace-row-w3"));
+    expect(sidebar(app).slice(0, 3)).toEqual(["Private", "Difference Engine", "Analytical Engine"]);
+    expect(hides(app)).toEqual([]);
+    await app.waitUntil(() => hides(app).length === 1);
+    await app.wait(300);
     expect(orders(app)).toEqual([["w2", "w1", "w3"]]);
+    expect(sidebar(app).slice(0, 3)).toEqual(["Private", "Difference Engine", "Analytical Engine"]);
     expect(app.shows("id:workspace-row-w3")).toBe(false);
     expect(app.shows("id:sidebar-hidden-workspaces")).toBe(true);
   });
