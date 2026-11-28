@@ -174,6 +174,8 @@ mount(() => (
     <LocalHostsPanel server={SERVER} servers={() => SERVERS} {...(typeof params.id === "string" ? { id: params.id } : {})} createPairing={async (server, name) => {
       sent.update(list => [...list, server === SERVER ? `pairing ${name}` : `pairing ${name} for ${server}`]);
       return { id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", code: "Z3AQnmLC6x9-xm2HZqXObhdMmKQhqLOKk3ST1ZuBYIw" };
+    }} renameHost={async (server, connectorId, name) => {
+      sent.update(list => [...list, `rename ${connectorId} to ${name}${server === SERVER ? "" : ` for ${server}`}`]);
     }} />
     <HomeCommandUpdate openLocalHosts={() => sent.update(list => [...list, "open local hosts"])} />
     <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />

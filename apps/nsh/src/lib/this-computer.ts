@@ -1189,6 +1189,13 @@ export function localHosts(): LocalHosts {
   return hosts;
 }
 
+export async function hostRenamed(server: string, connectorId: string, name: string): Promise<void> {
+  if (!hostsHere) return;
+  const all = localHosts();
+  await all.load();
+  untracked(() => all.withConnector(server, connectorId))?.change({ name });
+}
+
 export function thisComputerHostIds(server?: string): string[] {
   if (!hostsHere) return [];
   const signedIn = server === undefined ? auth() : undefined;

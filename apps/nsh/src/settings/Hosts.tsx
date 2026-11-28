@@ -5,6 +5,7 @@ import type { TrustedHostsResponse } from "../../../../packages/shared/src/trust
 import { modelKey, segment, type Workspace } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
+import { hostRenamed } from "../lib/this-computer";
 import { timestamp } from "../lib/format";
 import { createAction, createResource } from "../lib/resource";
 import { ConnectionStatus, createConnections, HostCapabilities, hostTone } from "../hosts";
@@ -208,7 +209,22 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
   const revokeAction = createAction();
   const reconnecting = signal(false);
   const pairing = signal(false);
+  const renameAction = createAction();
+  const renaming = signal(false);
+  const newName = signal("");
   const owner = () => connector().role !== "admin";
+  const openRename = () => { renameAction.clear(); newName.set(connector().name); renaming.set(true); };
+  async function rename() {
+    const next = newName().trim();
+    if (renameAction.busy() || !owner() || !next) return;
+    if (next === connector().name) { renaming.set(false); return; }
+    const saved = await renameAction.run(async () => {
+      await session().api(`/api/connectors/${segment(connector().id)}`, { method: "PATCH", body: { name: next } });
+      await hostRenamed(session().origin, connector().id, next).catch(() => undefined);
+      props.refresh();
+    }, "Host renamed");
+    if (saved) renaming.set(false);
+  }
   const associated = () => [...new Set([...(connector().connectedWorkspaceIds ?? []), ...connector().workspaceIds])];
   const sharingRows = (): ShareTarget[] => {
     if (data.workspacesLoading()) return [];
@@ -250,6 +266,13 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
                 trailing={<Button small variant="outline" label={connector().revokedAt ? "Pair again" : "Reconnect"} disabled={revokeAction.busy()}
                   onPress={() => (connector().revokedAt ? pairing.set(true) : reconnecting.set(true))} />} />
             </If>
+            <Row title="Name" trailing={<>
+              <Small>{connector().name}</Small>
+              <If when={owner() && !connector().revokedAt}>
+                <Button small variant="outline" icon="pencil" label="Rename" testID="host-rename" disabled={renameAction.busy()} onPress={openRename} />
+              </If>
+            </>} />
+            <If when={!renaming() && renameAction.notice()}><CardBody><Feedback notice={renameAction.notice()} /></CardBody></If>
             <Row title="Owner" trailing={connector().ownerName} />
             <Row title="Connector" hint={connector().version ? undefined : "Connectors from 0.23 and older don't report it. Update with npx pikibun@latest connect"}
               trailing={connector().version ?? "Not reported"} />
@@ -290,6 +313,17 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
         </Section>
       </If>
       <PairHostSheet open={pairing()} onClose={() => pairing.set(false)} refresh={props.refresh} go={props.go} />
+      <FormSheet open={renaming()} title="Rename host" onClose={() => { if (!renameAction.busy()) renaming.set(false); }} testID="rename-host-sheet"
+        footer={<>
+          <Button label="Cancel" disabled={renameAction.busy()} onPress={() => renaming.set(false)} />
+          <Button testID="host-rename-save" variant="primary" label={renameAction.busy() ? "Saving…" : "Rename"} disabled={renameAction.busy() || !newName().trim()}
+            onPress={() => void rename()} />
+        </>}>
+        <Field label="Name" hint="Everyone you share it with sees the new name">
+          <TextField testID="host-rename-name" value={newName()} onChange={value => newName.set(value)} maxLength={120} autoFocus onSubmit={() => void rename()} />
+        </Field>
+        <Feedback error={renameAction.error()} />
+      </FormSheet>
       <FormSheet open={reconnecting()} title={`Reconnect ${connector().name}`} onClose={() => reconnecting.set(false)}
         footer={<Button label="Done" onPress={() => { props.refresh(); reconnecting.set(false); }} />}>
         <Banner tone={connector().online ? "success" : "warning"} title={connector().online ? "Host is connected" : "Start the connection on your host"}>

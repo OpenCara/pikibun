@@ -440,6 +440,22 @@ describe("settings", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/connectors/pairings`)).toEqual({ name: "Build box" });
   });
 
+  test("a host's owner renames it from its page", async () => {
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner" }] } },
+      [`PATCH ${ORIGIN}/api/connectors/c1`]: { body: { connector: { ...host, name: "Studio Mac" } } },
+    });
+    await app.press("id:host-row-c1");
+    await app.waitFor("id:host-rename");
+    await app.press("id:host-rename");
+    await app.waitFor("id:host-rename-name");
+    await app.clear("id:host-rename-name");
+    await app.type("id:host-rename-name", " Studio Mac ");
+    await app.press("id:host-rename-save");
+    await app.waitFor("text:Host renamed");
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1`)).toEqual({ name: "Studio Mac" });
+  });
+
   test("a host's sharing lists every workspace with a toggle that shares or, once confirmed, stops sharing it, and can't share one with no sources", async () => {
     const second = { id: "w2", name: "Difference Engine", ownerId: "u1", role: "owner" };
     const empty = { id: "w3", name: "Empty Room", ownerId: "u1", role: "owner" };

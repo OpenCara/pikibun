@@ -16,7 +16,7 @@ import { Checkbox, Field, Select, TextField } from "../form";
 import { Icon } from "../icons";
 import { palette, type Tone } from "../theme";
 import {
-  Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, Feedback, IconButton, Note, Row, Section, Segmented, Small, Value,
+  Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, Feedback, FormSheet, IconButton, Note, Row, Section, Segmented, Small, Value,
 } from "../ui";
 import { SectionPage, type SectionProps } from "./parts";
 
@@ -33,25 +33,33 @@ setUnsandboxedConsent((warning, server, missing) => confirm({
 }));
 
 export type CreatePairing = (server: string, name: string) => Promise<{ id: string; code: string }>;
+export type RenameHost = (server: string, connectorId: string, name: string) => Promise<void>;
+
+function serverApi(server: string) {
+  const current = untracked(session);
+  if (originOf(server) === originOf(current.origin)) return current.api;
+  const saved = untracked(servers).find(item => originOf(item.origin) === originOf(server));
+  if (!saved) throw new Error(`This app isn't signed in to ${displayOrigin(server)} any more. Add it again under Settings › Profile › Servers.`);
+  return createApi({ baseUrl: saved.origin, auth: () => saved.token });
+}
 
 async function createPairing(server: string, name: string): Promise<ConnectorPairing> {
-  const current = untracked(session);
-  let api = current.api;
-  if (originOf(server) !== originOf(current.origin)) {
-    const saved = untracked(servers).find(item => originOf(item.origin) === originOf(server));
-    if (!saved) throw new Error(`This app isn't signed in to ${displayOrigin(server)} any more. Add it again under Settings › Profile › Servers.`);
-    api = createApi({ baseUrl: saved.origin, auth: () => saved.token });
-  }
-  return (await api<{ pairing: ConnectorPairing }>("/api/connectors/pairings", { method: "POST", body: { name } })).pairing;
+  return (await serverApi(server)<{ pairing: ConnectorPairing }>("/api/connectors/pairings", { method: "POST", body: { name } })).pairing;
+}
+
+async function renameHost(server: string, connectorId: string, name: string): Promise<void> {
+  await serverApi(server)(`/api/connectors/${encodeURIComponent(connectorId)}`, { method: "PATCH", body: { name } });
 }
 
 export function ThisComputer(props: SectionProps) {
   const { origin } = untracked(session);
   const choices = () => [...new Set([origin, ...servers().map(item => item.origin)])];
-  return <LocalHostsPanel server={origin} servers={choices} id={props.id} go={props.go} createPairing={createPairing} />;
+  return <LocalHostsPanel server={origin} servers={choices} id={props.id} go={props.go} createPairing={createPairing} renameHost={renameHost} />;
 }
 
-export function LocalHostsPanel(props: { server: string; servers?: () => string[]; id?: string; go?: SectionProps["go"]; createPairing: CreatePairing }) {
+export function LocalHostsPanel(props: {
+  server: string; servers?: () => string[]; id?: string; go?: SectionProps["go"]; createPairing: CreatePairing; renameHost?: RenameHost;
+}) {
   const opened = signal(props.id);
   const open = (id?: string) => {
     if (props.go) props.go({ name: "settings", section: "desktop", ...(id ? { id } : {}) });
@@ -60,7 +68,7 @@ export function LocalHostsPanel(props: { server: string; servers?: () => string[
   const choices = () => props.servers?.() ?? [props.server];
   return (
     <If when={opened()} else={<HostList server={props.server} servers={choices} createPairing={props.createPairing} open={open} />}>
-      {id => <HostPage id={id()} server={props.server} createPairing={props.createPairing} back={() => open()} />}
+      {id => <HostPage id={id()} server={props.server} createPairing={props.createPairing} renameHost={props.renameHost ?? renameHost} back={() => open()} />}
     </If>
   );
 }
@@ -405,7 +413,7 @@ function sandboxHint(sandbox: LocalSandbox): string {
   }
 }
 
-function HostPage(props: { id: string; server: string; createPairing: CreatePairing; back: () => void }) {
+function HostPage(props: { id: string; server: string; createPairing: CreatePairing; renameHost: RenameHost; back: () => void }) {
   const hosts = localHosts();
   const loaded = signal(false);
   void hosts.load().finally(() => loaded.set(true));
@@ -427,7 +435,7 @@ function HostPage(props: { id: string; server: string; createPairing: CreatePair
           <>
             <CommandSection environment={current().environment} busy={current().inspecting()} refresh={async () => { await current().refresh(); return untracked(() => current().problem()); }} />
             <UpdatingSection environment={current().environment} />
-            <HostSection host={current()} createPairing={props.createPairing} />
+            <HostSection host={current()} createPairing={props.createPairing} renameHost={props.renameHost} />
             <If when={current().inspection()}>
               <SandboxSection host={current()} />
               <ModelsSection host={current()} />
@@ -442,10 +450,27 @@ function HostPage(props: { id: string; server: string; createPairing: CreatePair
   );
 }
 
-function HostSection(props: { host: LocalHost; createPairing: CreatePairing }) {
+function HostSection(props: { host: LocalHost; createPairing: CreatePairing; renameHost: RenameHost }) {
   const host = props.host;
   const action = createAction();
   const name = signal(untracked(() => host.name()));
+  const renameAction = createAction();
+  const renaming = signal(false);
+  const newName = signal("");
+  const openRename = () => { renameAction.clear(); newName.set(untracked(() => host.name())); renaming.set(true); };
+  async function rename() {
+    const next = untracked(newName).trim();
+    if (renameAction.busy() || !next) return;
+    if (next === untracked(() => host.name())) { renaming.set(false); return; }
+    const origin = untracked(server);
+    const connectorId = untracked(() => host.running()?.connectorId ?? host.config().connectorIds?.at(-1));
+    const saved = await renameAction.run(async () => {
+      if (connectorId) await props.renameHost(origin, connectorId, next);
+      host.change({ name: next });
+      name.set(next);
+    }, connectorId ? `Renamed to ${next}, here and on ${hostOf(origin)}.` : `Renamed to ${next} here. Rename it on ${hostOf(origin)} too, under Settings › Hosts.`);
+    if (saved) renaming.set(false);
+  }
   const server = () => host.server();
   const pairingProblem = () => {
     const inspection = host.inspection();
@@ -490,8 +515,23 @@ function HostSection(props: { host: LocalHost; createPairing: CreatePairing }) {
               <Feedback error={action.error()} notice={action.notice()} />
             </CardBody>
           }>
-          <Row title={`${host.name()} is a host of ${hostOf(server())}`} hint={isolation(host)} trailing={stateBadge(host)} />
+          <Row title={`${host.name()} is a host of ${hostOf(server())}`} hint={isolation(host)} trailing={<>
+            {stateBadge(host)}
+            <Button small variant="outline" icon="pencil" label="Rename" testID="this-computer-rename" disabled={renameAction.busy()} onPress={openRename} />
+          </>} />
+          <FormSheet open={renaming()} title={`Rename ${host.name()}`} onClose={() => { if (!renameAction.busy()) renaming.set(false); }} testID="this-computer-rename-sheet"
+            footer={<>
+              <Button label="Cancel" disabled={renameAction.busy()} onPress={() => renaming.set(false)} />
+              <Button testID="this-computer-rename-save" variant="primary" label={renameAction.busy() ? "Saving…" : "Rename"} disabled={renameAction.busy() || !newName().trim()}
+                onPress={() => void rename()} />
+            </>}>
+            <Field label="Host name" hint={`How ${hostOf(server())} lists this host, here and under Settings › Hosts`}>
+              <TextField testID="this-computer-rename-name" value={newName()} onChange={value => newName.set(value)} maxLength={120} autoFocus onSubmit={() => void rename()} />
+            </Field>
+            <Feedback error={renameAction.error()} />
+          </FormSheet>
           <CardBody>
+            <If when={!renaming() && renameAction.notice()}><Feedback notice={renameAction.notice()} /></If>
             <If when={host.error() && host.state() === "stopped"}><Banner tone="danger" title="The host stopped">{host.error()}</Banner></If>
             <View style={{ flexDirection: "row", gap: 8 }}>
               <If when={host.state() === "stopped"}

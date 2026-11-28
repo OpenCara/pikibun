@@ -32,7 +32,7 @@ Each time a host (or Pikibun on this computer) starts, the app checks the versio
 Under **Add a host** (or **Add a host** beside **Hosts on this Mac**, once there is one):
 
 - **Pikibun server**: where the host runs sessions. It lists the servers the app is signed in to, the one you're on first.
-- **Host name**: how the server lists it, such as *My Mac*.
+- **Host name**: how the server lists it, such as *My Mac*. Change it later with **Rename** on the host's page, which renames it here and on its server.
 - **Sandbox**: how its sessions are isolated:
   - **macOS:** **No sandbox** (sessions run directly as you) or **macOS sandbox** (experimental; needs macOS 15 or later and the developer tools, `xcode-select --install`).
   - **Windows:** **Windows sandbox** (Windows' own, experimental, where this computer meets its requirements, which **Prerequisites** lists) or **WSL2** (WSL2's bubblewrap sandbox, with the **WSL distribution** you choose, or WSL's default). See [WSL2](#wsl2) below.

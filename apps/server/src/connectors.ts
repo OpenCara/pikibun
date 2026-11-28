@@ -442,7 +442,7 @@ export function registerConnectors(app: Hono<AppEnv>): void {
   app.patch('/api/connectors/:id', async c => {
     const row = await ownedConnector(c);
     const input = await jsonObject(c, 4096);
-    onlyFields(input, ['name']);
+    if (Object.keys(input).some(key => key !== 'name')) fail(400, 'invalid_input', 'Only a host\'s name can be changed here.');
     const name = text(input.name, 'name', 120).trim();
     if (!name || /[\x00-\x1f\x7f]/.test(name)) fail(400, 'invalid_input', 'Invalid name.');
     await c.env.DB.query('UPDATE connectors SET name = ? WHERE id = ? AND removed_at IS NULL').bind(name, row.id).run();

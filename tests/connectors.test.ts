@@ -391,6 +391,21 @@ for (const revoked of [false, true]) {
   });
 }
 
+test('a host\'s owner renames it, and only its owner', async t => {
+  const f = await fixture(t);
+  const s = await privateHostSession(f);
+  const path = `/api/connectors/${s.connector.connectorId}`;
+  await denied(await s.member.request('PATCH', path, { name: 'Taken over' }), 404, 'not_found');
+  await denied(await f.request('PATCH', path, { name: 'No token' }, { Cookie: s.owner.cookie }), 403, 'invalid_csrf');
+  for (const name of ['', '   ', 'a'.repeat(121), 'Tab\there', 7]) await denied(await s.owner.request('PATCH', path, { name }), 400, 'invalid_input');
+  await denied(await s.owner.request('PATCH', path, { name: 'Studio Mac', models: [] }), 400, 'invalid_input');
+  const renamed = await json<{ connector: ConnectorInfo }>(await s.owner.request('PATCH', path, { name: '  Studio Mac ' }));
+  assert.equal(renamed.connector.name, 'Studio Mac');
+  const listed = (await json<{ connectors: ConnectorInfo[] }>(await s.owner.request('GET', '/api/connectors'))).connectors;
+  assert.deepEqual(listed.map(connector => connector.name), ['Studio Mac']);
+  assert.equal(f.sqlite.prepare('SELECT name FROM connectors WHERE id = ?').get(s.connector.connectorId)!.name, 'Studio Mac');
+});
+
 test('pairings require a CSRF-protected cookie, retain its owner, are single-use, and hash secrets at rest', async t => {
   const f = await fixture(t); const alice = await f.client('alice'); const bob = await f.client('bob');
   await denied(await f.request('POST', '/api/connectors/pairings', { name: 'Pi' }), 401, 'unauthorized');
