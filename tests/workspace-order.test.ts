@@ -5,7 +5,7 @@ import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { testDatabase } from './helpers/control-plane.js';
 import type { Workspace } from '../packages/shared/src/types.js';
-import { dropAt, dropIndex, movableIds, moveBy, orderWorkspaces } from '../apps/nsh/src/lib/workspace-order.js';
+import { dropAt, dropIndex, movableIds, moveBy, orderWorkspaces, withHidden } from '../apps/nsh/src/lib/workspace-order.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'workspace-order-test-secret-not-for-deployment';
@@ -134,6 +134,8 @@ test('the client orders, moves and drops workspaces as the sidebar shows them', 
   assert.deepEqual(orderWorkspaces(listed, ['c', 'p', 'a']).map(item => item.id), ['p', 'c', 'a', 'b']);
   assert.deepEqual(movableIds(listed), ['a', 'b', 'c']);
   assert.deepEqual(moveBy(['a', 'b', 'c'], 'a', 1), ['b', 'a', 'c']);
+  assert.deepEqual(withHidden(['a', 'b', 'c', 'd'], ['c', 'a', 'd']), ['c', 'b', 'a', 'd']);
+  assert.deepEqual(withHidden(['a', 'b'], ['b', 'a']), ['b', 'a']);
   assert.equal(moveBy(['a', 'b', 'c'], 'a', -1), null);
   assert.equal(moveBy(['a', 'b', 'c'], 'c', 1), null);
 

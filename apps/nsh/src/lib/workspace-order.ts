@@ -19,6 +19,13 @@ export function movableIds(list: readonly OrderedWorkspace[]): string[] {
   return list.filter(item => !item.personal).map(item => item.id);
 }
 
+export function withHidden(all: readonly string[], shown: readonly string[]): string[] {
+  const visible = new Set(shown);
+  let at = 0;
+  const placed = all.map(id => (visible.has(id) ? shown[at++] ?? id : id));
+  return [...placed, ...shown.filter(id => !all.includes(id))];
+}
+
 export function moveBy(ids: readonly string[], id: string, step: number): string[] | null {
   const from = ids.indexOf(id);
   const to = from + step;

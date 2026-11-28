@@ -1,6 +1,6 @@
 import { computed, context, effect, signal, Storage, untracked, type Accessor } from "nsh";
 import {
-  chatPreference, parseChatPreference, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
+  chatPreference, parseChatPreference, segment, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
   type SessionRecord, type Workspace,
 } from "../shared";
 import { session } from "./auth";
@@ -63,6 +63,7 @@ export interface AppData {
   workspacesError: Accessor<string>;
   refreshWorkspaces: () => Promise<void>;
   reorderWorkspaces: (ids: readonly string[]) => Promise<void>;
+  hideWorkspace: (id: string, hidden: boolean) => Promise<void>;
   lastWorkspaceId: Accessor<string>;
   setLastWorkspaceId: (id: string) => void;
   lastChat: Accessor<ChatPreference | undefined>;
@@ -86,12 +87,16 @@ export function createAppData(): AppData {
   const sessions = createResource<{ sessions: SessionRecord[] }>(() => "/api/sessions", () => (working() ? 10_000 : 30_000));
   const workspaces = createResource<{ workspaces: Workspace[] }>(() => "/api/workspaces");
   const pendingOrder = signal<readonly string[] | null>(null);
+  const pendingHidden = signal<Readonly<Record<string, boolean>>>({});
   const listedWorkspaces = computed(() => {
     const list = workspaces.data()?.workspaces ?? [];
     const order = pendingOrder();
-    return order ? orderWorkspaces(list, order) : list;
+    const ordered = order ? orderWorkspaces(list, order) : list;
+    const hiding = pendingHidden();
+    return Object.keys(hiding).length ? ordered.map(item => (item.id in hiding ? { ...item, hidden: hiding[item.id] } : item)) : ordered;
   });
   let reorders = 0;
+  let hides = 0;
   effect(() => rememberLocalSessions(sessions.data()?.sessions ?? []));
   const sorted = computed(() => [...(sessions.data()?.sessions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   working = computed(() => liveActivity()?.activity === "working"
@@ -125,6 +130,21 @@ export function createAppData(): AppData {
       } catch (reason) {
         if (reorder !== reorders) return;
         pendingOrder.set(null);
+        void workspaces.refresh();
+        throw reason;
+      }
+    },
+    async hideWorkspace(id, hidden) {
+      const change = ++hides;
+      pendingHidden.update(current => ({ ...current, [id]: hidden }));
+      try {
+        const result = await untracked(session).api<{ workspaces: Workspace[] }>(`/api/workspaces/${segment(id)}/hidden`, { method: "PUT", body: { hidden } });
+        if (change !== hides) return;
+        workspaces.replace(result);
+        pendingHidden.set({});
+      } catch (reason) {
+        if (change !== hides) return;
+        pendingHidden.set({});
         void workspaces.refresh();
         throw reason;
       }
