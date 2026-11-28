@@ -9,6 +9,7 @@ export interface Resource<T> {
   loading: Accessor<boolean>;
   error: Accessor<string>;
   refresh: () => Promise<void>;
+  replace: (value: T) => void;
 }
 
 export function createResource<T>(path: Accessor<string | null>, pollMs?: Accessor<number | undefined> | number): Resource<T> {
@@ -17,6 +18,7 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
   const error = signal("");
   const revision = signal(0);
   let previousPath: string | null | undefined;
+  let replacements = 0;
   let waiting: { revision: number; done: () => void }[] = [];
   const settle = (upTo: number) => {
     const done = waiting.filter(item => item.revision <= upTo);
@@ -44,9 +46,10 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
     const load = async () => {
       if (pending) return;
       pending = true;
+      const replaced = replacements;
       try {
         const result = await api<T>(current, { signal: controller.signal });
-        if (!controller.signal.aborted) { data.set(result); error.set(""); }
+        if (!controller.signal.aborted && replaced === replacements) { data.set(result); error.set(""); }
       } catch (reason) {
         if (!controller.signal.aborted) error.set(errorMessage(reason));
       } finally {
@@ -72,6 +75,7 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
       waiting.push({ revision: next, done });
       revision.set(next);
     }),
+    replace: value => { replacements++; data.set(value); error.set(""); },
   };
 }
 

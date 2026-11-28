@@ -1,6 +1,6 @@
 # Workspaces and members
 
-Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** shows the workspace's name with **New session** beside it, and four tabs that stay in place while their sections scroll:
+Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Below it, put your other workspaces in the order you like: drag one by its row in the sidebar (on a phone or tablet, by the grip at its right), or choose **Move up** or **Move down** in its menu. The order is yours alone, on every device (`PUT /api/workspaces/order` with `{"workspaceIds": […]}`); a workspace you join or create later goes last. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** shows the workspace's name with **New session** beside it, and four tabs that stay in place while their sections scroll:
 
 - **Overview**: **General**, **Presets** (for owners and admins), **Setup** (until a source is added, a host paired and a session started), **Members**, **Invite link**, **Pending members** and, for owners and admins, **Data export**.
 - **Sources**: the **Git repositories**, document sources and workspace connections sessions work on, and **Push access**.

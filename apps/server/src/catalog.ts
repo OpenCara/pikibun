@@ -10,7 +10,9 @@ import {
   addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, newWorkspacePresetStatements, presetInput, auditStatement, changeMemberRoleStatement, ownHostsOnlySQL, personalWorkspaceName, removeMemberStatements, requireMember,
   requireSharedWorkspace, workspaceOwnerStatement,
 } from './authority/index.js';
+import { z } from 'zod';
 import { modelDefinition } from './db.js';
+import { body as parsedBody, identifier as identifierSchema } from './schemas.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
 import type { AgentRow, Env, ModelRow, AppEnv } from './types.js';
 import { ConstraintError, type Query } from './db/types.js';
@@ -236,18 +238,44 @@ export async function ensurePersonalWorkspace(env: Env, userId: string): Promise
   }
 }
 
+const MAX_ORDERED_WORKSPACES = 1000;
+
+function workspacesStatement(env: Env, userId: string): Query<Omit<Workspace, 'personal'> & { personal: number }> {
+  return env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
+      CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal
+    FROM workspaces w
+    INNER JOIN workspace_members member ON member.workspace_id = w.id AND member.user_id = ?
+    LEFT JOIN personal_workspaces p ON p.workspace_id = w.id AND p.user_id = member.user_id
+    LEFT JOIN workspace_order o ON o.workspace_id = w.id AND o.user_id = member.user_id
+    ORDER BY CASE WHEN p.workspace_id IS NULL THEN 1 ELSE 0 END, CASE WHEN o.position IS NULL THEN 1 ELSE 0 END, o.position, w.created_at, w.id`).bind(userId);
+}
+
+const listedWorkspaces = (rows: (Omit<Workspace, 'personal'> & { personal: number })[]): Workspace[] =>
+  rows.map(row => ({ ...row, personal: Number(row.personal) === 1 }));
+
+const workspaceOrderBody = z.strictObject({
+  workspaceIds: z.array(identifierSchema('workspaceIds')).max(MAX_ORDERED_WORKSPACES).refine(ids => new Set(ids).size === ids.length),
+});
+
 export function registerCatalog(app: Hono<AppEnv>): void {
   app.get('/api/workspaces', async c => {
     const userId = c.get('auth').userId;
     await ensurePersonalWorkspace(c.env, userId);
-    const rows = await c.env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
-        CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal
-      FROM workspaces w
-      INNER JOIN workspace_members member ON member.workspace_id = w.id AND member.user_id = ?
-      LEFT JOIN personal_workspaces p ON p.workspace_id = w.id AND p.user_id = member.user_id
-      ORDER BY CASE WHEN p.workspace_id IS NULL THEN 1 ELSE 0 END, w.created_at, w.id`).bind(userId).all();
-    const workspaces: Workspace[] = rows.map(row => ({ ...row, personal: Number(row.personal) === 1 }));
-    return c.json({ workspaces });
+    return c.json({ workspaces: listedWorkspaces(await workspacesStatement(c.env, userId).all()) });
+  });
+
+  app.put('/api/workspaces/order', async c => {
+    const userId = c.get('auth').userId;
+    const { workspaceIds: ids } = await parsedBody(c, workspaceOrderBody, { maxBytes: 256 * 1024, message: 'Invalid workspaceIds.' });
+    const result = await c.env.DB.batch<Omit<Workspace, 'personal'> & { personal: number }>([
+      c.env.DB.query<never>('DELETE FROM workspace_order WHERE user_id = ?').bind(userId),
+      ...ids.map((workspaceId, position) => c.env.DB.query<never>(`INSERT INTO workspace_order (user_id, workspace_id, position)
+        SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
+          AND NOT EXISTS (SELECT 1 FROM personal_workspaces WHERE workspace_id = ?)`)
+        .bind(userId, workspaceId, position, workspaceId, userId, workspaceId)),
+      workspacesStatement(c.env, userId),
+    ]);
+    return c.json({ workspaces: listedWorkspaces(result[result.length - 1]!.results) });
   });
 
   app.post('/api/workspaces', async c => {
@@ -361,6 +389,9 @@ export function registerCatalog(app: Hono<AppEnv>): void {
       auditAfterChange(c.env, actorId, 'workspace.member.remove', workspaceId, { userId: targetId }, auditId),
       removal.grants,
       c.env.DB.query(`DELETE FROM workspace_database_consents WHERE workspace_id = ? AND user_id = ?
+        AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
+        .bind(workspaceId, targetId, auditId),
+      c.env.DB.query(`DELETE FROM workspace_order WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
       removal.toolGroup,
