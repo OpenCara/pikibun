@@ -338,6 +338,14 @@ describe("settings", () => {
     await app.submit("id:settings-search");
     await app.waitFor("id:workspace-tab-agents");
     await app.clear("id:settings-search");
+    await app.type("id:settings-search", "analytical members");
+    await app.waitFor("id:settings-result-workspace-setting-w1-members");
+    expect(app.shows("id:settings-result-workspace-w1")).toBe(false);
+    await app.clear("id:settings-search");
+    await app.type("id:settings-search", "analytical");
+    await app.waitFor("id:settings-result-workspace-w1");
+    expect(app.shows("id:settings-result-workspace-setting-w1-members")).toBe(false);
+    await app.clear("id:settings-search");
     await app.type("id:settings-search", "no such thing");
     await app.waitFor("id:settings-search-empty");
     await app.press("id:settings-search-clear");

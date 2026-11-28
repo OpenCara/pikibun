@@ -65,8 +65,8 @@ type Entry = SettingsResult & { text: string };
 export function searchSettings(
   query: string, sections: readonly SearchableSection[], workspaces: readonly { id: string; name: string }[], scopeOf: (section: SearchableSection) => string,
 ): SettingsResult[] {
-  const first = query.trim().toLowerCase().split(/\s+/)[0];
-  if (!first) return [];
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
   const entries: Entry[] = [
     ...sections.map((section): Entry => ({ key: `section-${section.id}`, title: section.label, hint: scopeOf(section), icon: section.icon, target: { section: section.id },
       text: section.label })),
@@ -79,6 +79,6 @@ export function searchSettings(
       target: { section: "workspaces", id: workspace.id, tab: setting.tab }, workspace, text: `${setting.title} ${workspace.name}`,
     }))),
   ];
-  const named = entries.filter(entry => entry.title.toLowerCase().includes(first));
+  const named = entries.filter(entry => words.some(word => entry.title.toLowerCase().includes(word)));
   return matching(query, named, entry => entry.text).slice(0, MAX_SETTINGS_RESULTS).map(({ text: _text, ...result }) => result);
 }

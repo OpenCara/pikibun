@@ -48,7 +48,9 @@ leaving them is one row in the same spot as the app's name: **Back to app**.
   which the palette's settings commands match too), each workspace by name, and each workspace's settings on its tabs
   (`workspaceSettings` in `apps/nsh/src/settings/search.ts`), such as **Members · Analytical Engine · Overview**.
   Return opens the first. A result opens its section, or its workspace on the right tab. The phone's list of sections
-  has the same search above it.
+  has the same search above it. Sections are found by their names in the app's language; the settings in them by
+  their English names, as their pages are still English (see [localization](localization.md)). A query's words may
+  come in any order, so **analytical members** finds Members on that workspace as **members analytical** does.
 - **Workspaces** lists each workspace under it, as Orca lists projects, so a workspace's page is one step from
   anywhere in Settings rather than two.
 - The page is titled with its section and whose it is (the server, **This Mac**, or the workspace's name), as both

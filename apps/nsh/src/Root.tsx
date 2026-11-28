@@ -1,5 +1,6 @@
 import { computed, effect, keymap, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
+import { t } from "nsh/i18n";
 import { HomeUpdate } from "./components/AppUpdate";
 import { HomeCommandUpdate } from "./components/CommandUpdate";
 import { CommandPalette } from "./components/CommandPalette";
@@ -26,6 +27,7 @@ import { SessionView } from "./screens/SessionView";
 import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
 import { UsernameSetup } from "./screens/UsernameSetup";
+import { applyStoredLanguage } from "./lib/language";
 import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, scopeTitle, SectionList, SettingsSidebar, visibleSections, type SettingsTarget } from "./settings";
 import { canCreateSessions, type PaletteSession } from "./shared";
@@ -52,6 +54,7 @@ const WIDE = 700;
 export function Root() {
   startPage();
   void applyStoredAppearance();
+  void applyStoredLanguage();
   void restore();
   resumeThisComputer();
   resumeThisServer();
@@ -222,7 +225,7 @@ function Shell() {
   }
   const workspaceName = (id: string) => data.workspaces().find(workspace => workspace.id === id)?.name;
   const paletteSessions = computed((): PaletteSession[] => data.sessions().map(item => ({
-    id: item.id, title: item.title, hint: [workspaceName(item.workspaceId), item.status === "archived" ? "Archived" : undefined].filter(Boolean).join(" · ") || undefined,
+    id: item.id, title: item.title, hint: [workspaceName(item.workspaceId), item.status === "archived" ? t("nav.archived") : undefined].filter(Boolean).join(" · ") || undefined,
   })));
   function openById(id: string) {
     const known = untracked(data.sessions).some(item => item.id === id);
@@ -238,12 +241,12 @@ function Shell() {
   const workspaceSettings = (workspaceId: string) => openSettings("workspaces", workspaceId);
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-      <IconButton testID="all-sessions" icon="history" label="All sessions" onPress={allSessions} />
-      <IconButton testID="open-commands" icon="command" label="Commands" shortcut={COMMANDS_KEY} onPress={() => commands.open()} />
-      <IconButton testID="new-session" icon="plus" label="New session" shortcut={NEW_SESSION_KEY} onPress={() => startNew()} />
+      <IconButton testID="all-sessions" icon="history" label={t("nav.all_sessions")} onPress={allSessions} />
+      <IconButton testID="open-commands" icon="command" label={t("nav.commands")} shortcut={COMMANDS_KEY} onPress={() => commands.open()} />
+      <IconButton testID="new-session" icon="plus" label={t("nav.new_session")} shortcut={NEW_SESSION_KEY} onPress={() => startNew()} />
     </View>
   );
-  const settingsButton = () => <IconButton testID="open-settings" icon="settings" label="Settings" shortcut={SETTINGS_KEY} onPress={() => openSettings()} />;
+  const settingsButton = () => <IconButton testID="open-settings" icon="settings" label={t("nav.settings")} shortcut={SETTINGS_KEY} onPress={() => openSettings()} />;
   const toolbar = (home: boolean) => (
     <MainToolbar home={home} onNew={() => startNew()} onAll={allSessions} onCommands={() => commands.open()} />
   );
@@ -258,7 +261,7 @@ function Shell() {
               return (
                 <If when={wide()}
                   else={
-                    <Page title="Sessions" leading={drawsHeaders ? <Logo size={22} /> : settingsButton()} actions={drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions()}>
+                    <Page title={t("nav.sessions")} leading={drawsHeaders ? <Logo size={22} /> : settingsButton()} actions={drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions()}>
                       <View style={{ flex: 1 }}>
                         <HomeUpdate style={{ paddingHorizontal: 16, paddingTop: 12 }} />
                         <HomeCommandUpdate style={{ paddingHorizontal: 16, paddingTop: 12 }} openLocalHosts={() => openSettings("desktop")} />
@@ -299,19 +302,19 @@ function Shell() {
               return <SessionView id={route.id} page front={() => sessionInFront(route.id)} openSession={openSession} onBack={back} go={go} />;
             case "new":
               return (
-                <Page title="New session" onBack={back}>
+                <Page title={t("nav.new_session")} onBack={back}>
                   <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} go={go} />
                 </Page>
               );
             case "all-sessions":
               return (
-                <Page title="Sessions" onBack={back}>
+                <Page title={t("nav.sessions")} onBack={back}>
                   <Sessions onOpen={openFromPage} onOpenById={() => commands.open("open-by-id")} onNew={() => startNew()} />
                 </Page>
               );
             case "open":
               return (
-                <Page title="Open a session" onBack={back}>
+                <Page title={t("nav.open_session")} onBack={back}>
                   <OpenSession onOpen={openFromPage} initial={route.id} />
                 </Page>
               );
@@ -319,11 +322,11 @@ function Shell() {
               return (
                 <If when={wide()}
                   else={
-                    <Page title="Settings" onBack={back}>
+                    <Page title={t("nav.settings")} onBack={back}>
                       <SectionList onOpen={openSettingsAt} />
                     </Page>
                   }>
-                  <NavPage title="Settings" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
+                  <NavPage title={t("nav.settings")} headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <SettingsPage section={settingsAt().section} id={settingsAt().id} onOpen={openSettingsAt} onBack={leaveSettings} go={go} />
                   </NavPage>
                 </If>
@@ -338,7 +341,7 @@ function Shell() {
             }
             case "join":
               return (
-                <Page title="Join a workspace" onBack={back}>
+                <Page title={t("nav.join_workspace")} onBack={back}>
                   <JoinWorkspace token={route.token} onDone={() => nav.popToRoot()} go={go} />
                 </Page>
               );
@@ -362,38 +365,40 @@ function shellCommands(options: {
   const workspaceName = (id: string) => workspaces.find(workspace => workspace.id === id)?.name;
   const sections = visibleSections().filter(section => section.id !== "workspaces");
   return [
-    { id: "new-session", title: "New session", group: "Sessions", scope: "global", icon: "plus", binding: NEW_SESSION_KEY, keywords: ["start", "create"], run: () => options.startNew() },
+    { id: "new-session", title: t("nav.new_session"), group: t("nav.sessions"), scope: "global", icon: "plus", binding: NEW_SESSION_KEY, keywords: ["start", "create"],
+      run: () => options.startNew() },
     ...(creatable.length > 1 ? [{
-      id: "new-session-in", title: "New session in…", group: "Sessions", scope: "global", icon: "plus", keywords: ["workspace", "start", "create"],
-      input: { kind: "choice", placeholder: "Choose a workspace", choices: () => creatable.map(workspace => ({ value: workspace.id, label: workspace.name })),
+      id: "new-session-in", title: t("commands.new_session_in"), group: t("nav.sessions"), scope: "global", icon: "plus", keywords: ["workspace", "start", "create"],
+      input: { kind: "choice", placeholder: t("commands.choose_workspace"), choices: () => creatable.map(workspace => ({ value: workspace.id, label: workspace.name })),
         choose: id => options.startNew(id) },
     } satisfies AppCommand] : []),
     {
-      id: "switch-session", title: "Switch session…", group: "Sessions", scope: "global", icon: "history", binding: "mod+o", keywords: ["open", "go to"],
-      input: { kind: "choice", placeholder: "Type a session's title", empty: "No sessions yet",
+      id: "switch-session", title: t("commands.switch_session"), group: t("nav.sessions"), scope: "global", icon: "history", binding: "mod+o", keywords: ["open", "go to"],
+      input: { kind: "choice", placeholder: t("commands.type_session_title"), empty: t("commands.no_sessions"),
         choices: () => data.sessions().filter(item => item.status !== "archived").map(item => ({
           value: item.id, label: item.title, hint: workspaceName(item.workspaceId), current: item.id === options.current,
         })),
         choose: id => options.openSession(id) },
     },
-    { id: "all-sessions", title: "All sessions", group: "Sessions", scope: "global", icon: "history", keywords: ["archived", "search", "history"], run: options.allSessions },
+    { id: "all-sessions", title: t("nav.all_sessions"), group: t("nav.sessions"), scope: "global", icon: "history", keywords: ["archived", "search", "history"], run: options.allSessions },
     {
-      id: "open-by-id", title: "Open a session by ID…", group: "Sessions", scope: "global", icon: "hash", keywords: ["link", "paste"],
-      input: { kind: "text", placeholder: "Paste a session's ID or link", submitLabel: value => `Open session “${value}”`,
+      id: "open-by-id", title: t("nav.open_session_by_id"), group: t("nav.sessions"), scope: "global", icon: "hash", keywords: ["link", "paste"],
+      input: { kind: "text", placeholder: t("commands.paste_session_id"), submitLabel: value => t("commands.open_session_named", { id: value }),
         submit: value => options.openById(sessionIdIn(value) ?? value) },
     },
-    { id: "settings", title: "Settings", group: "Settings", scope: "global", icon: "settings", binding: SETTINGS_KEY, keywords: ["preferences"], run: () => options.openSettings() },
+    { id: "settings", title: t("nav.settings"), group: t("nav.settings"), scope: "global", icon: "settings", binding: SETTINGS_KEY, keywords: ["preferences"],
+      run: () => options.openSettings() },
     ...sections.map((section): AppCommand => ({
-      id: `settings-${section.id}`, title: section.label, group: "Settings", scope: "global", icon: section.icon, hint: scopeTitle(section.scope),
+      id: `settings-${section.id}`, title: section.label, group: t("nav.settings"), scope: "global", icon: section.icon, hint: scopeTitle(section.scope),
       ...(section.keywords ? { keywords: section.keywords } : {}), run: () => options.openSettings(section.id),
     })),
     {
-      id: "workspaces", title: "Workspaces…", group: "Settings", scope: "global", icon: "users", keywords: ["workspace settings", "members"],
-      input: { kind: "choice", placeholder: "Choose a workspace", empty: "No workspaces yet",
-        choices: () => [{ value: "", label: "All workspaces" }, ...workspaces.map(workspace => ({ value: workspace.id, label: workspace.name, hint: workspace.role }))],
+      id: "workspaces", title: t("commands.workspaces"), group: t("nav.settings"), scope: "global", icon: "users", keywords: ["workspace settings", "members"],
+      input: { kind: "choice", placeholder: t("commands.choose_workspace"), empty: t("commands.no_workspaces"),
+        choices: () => [{ value: "", label: t("commands.all_workspaces") }, ...workspaces.map(workspace => ({ value: workspace.id, label: workspace.name, hint: workspace.role }))],
         choose: id => options.openSettings("workspaces", id || undefined) },
     },
-    { id: "new-workspace", title: "New workspace", group: "Settings", scope: "global", icon: "plus", keywords: ["create workspace"], run: options.newWorkspace },
+    { id: "new-workspace", title: t("commands.new_workspace"), group: t("nav.settings"), scope: "global", icon: "plus", keywords: ["create workspace"], run: options.newWorkspace },
   ];
 }
 
@@ -423,9 +428,9 @@ function bindCommandKeys(registry: CommandRegistry) {
 function MainToolbar(props: { home: boolean; onNew: () => void; onAll: () => void; onCommands: () => void }) {
   return (
     <View testID="main-toolbar" style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-      <IconButton testID="new-session" icon="compose" label="New session" shortcut={NEW_SESSION_KEY} active={props.home} onPress={props.onNew} />
-      <IconButton testID="all-sessions" icon="history" label="All sessions" onPress={props.onAll} />
-      <IconButton testID="open-commands" icon="command" label="Commands" shortcut={COMMANDS_KEY} onPress={props.onCommands} />
+      <IconButton testID="new-session" icon="compose" label={t("nav.new_session")} shortcut={NEW_SESSION_KEY} active={props.home} onPress={props.onNew} />
+      <IconButton testID="all-sessions" icon="history" label={t("nav.all_sessions")} onPress={props.onAll} />
+      <IconButton testID="open-commands" icon="command" label={t("nav.commands")} shortcut={COMMANDS_KEY} onPress={props.onCommands} />
       <If when={!props.home}>
         <View style={{ width: 1, height: 20, marginLeft: 6, marginRight: 2, backgroundColor: palette().border }} />
       </If>
@@ -455,7 +460,7 @@ function Sidebar(props: {
         <If when={!usesBrowserSession}>
           <ServerSwitch action={switching} />
         </If>
-        <IconButton testID="open-settings" icon="settings" label="Settings" shortcut={SETTINGS_KEY} onPress={() => props.onSettings()} />
+        <IconButton testID="open-settings" icon="settings" label={t("nav.settings")} shortcut={SETTINGS_KEY} onPress={() => props.onSettings()} />
       </View>
     </View>
   );
@@ -471,20 +476,20 @@ function ServerSwitch(props: { action: Action }) {
     const mine = (origin: string) => origin === thisServerOrigin();
     const rows = list.filter(item => !mine(item.origin)).map((item): MenuAction => ({
       label: displayOrigin(item.origin), icon: item.origin === current() ? "check" : "cloud", testID: `server-menu-${displayOrigin(item.origin)}`,
-      hint: item.origin === current() ? [item.account, "This server"].filter(Boolean).join(" · ") : item.account || undefined,
+      hint: item.origin === current() ? [item.account, t("server.this")].filter(Boolean).join(" · ") : item.account || undefined,
       onSelect: () => { if (item.origin !== untracked(current)) run(() => switchServer(item.origin)); },
     }));
     const here = mine(current());
     const local: MenuAction[] = hostsHere ? [{
-      label: `Pikibun on ${computerName}`, icon: here ? "check" : "database", testID: "server-menu-own",
-      hint: here ? (own() ? "This server" : "This server · not running in this app: choose it to start it") : own() ? "Running on this computer" : "Starts your own Pikibun on this computer",
+      label: t("server.own", { computer: computerName }), icon: here ? "check" : "database", testID: "server-menu-own",
+      hint: here ? (own() ? t("server.this") : t("server.own_stopped")) : own() ? t("server.own_running") : t("server.own_start"),
       onSelect: () => { if (untracked(own) !== untracked(current)) run(() => signInToThisServer({ switching: true })); },
     }] : [];
-    return [...local, ...rows, "separator", { label: "Add a server", icon: "plus", testID: "server-menu-add", onSelect: addServer }];
+    return [...local, ...rows, "separator", { label: t("server.add"), icon: "plus", testID: "server-menu-add", onSelect: addServer }];
   };
   return (
-    <DropdownMenu label="Switch server" placement="top" items={items()}
-      trigger={<IconButton testID="open-servers" icon="cloud" label="Switch server" onPress={() => undefined} />} />
+    <DropdownMenu label={t("server.switch")} placement="top" items={items()}
+      trigger={<IconButton testID="open-servers" icon="cloud" label={t("server.switch")} onPress={() => undefined} />} />
   );
 }
 

@@ -1,5 +1,6 @@
 import { computed, safeArea, Scroll, signal, Text, View, type JSX } from "nsh";
 import { Button as BaseButton } from "nsh/base";
+import { t } from "nsh/i18n";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { displayOrigin } from "../lib/server";
@@ -53,33 +54,36 @@ const passwordsOffered = () => serverHealth()?.passwordAuth === true;
 export const serverVersion = () => serverHealth()?.version ?? null;
 export const codeSignInOffered = () => serverHealth()?.codeSignIn !== false;
 
-export const settingsSections: readonly SettingsSection[] = [
-  { id: "profile", label: "Profile", icon: "user", scope: "server", Component: Profile,
+const sectionList: Omit<SettingsSection, "label">[] = [
+  { id: "profile", icon: "user", scope: "server", Component: Profile,
     keywords: ["Identity", "Display name", "Git author name", "Git author email", "Environment variables", "Connected accounts", "Git accounts", "Document accounts",
       "Remote MCP servers", "Signed-in apps", "Sign in an app", "Requests to join", "Servers", "Username", "User ID", "Sign out", "This app", "App updates"] },
-  { id: "password", label: "Password", icon: "lock", scope: "server", passwords: true, Component: Password,
+  { id: "password", icon: "lock", scope: "server", passwords: true, Component: Password,
     keywords: ["Username", "Sign-in", "Change password", "Remove password"] },
-  { id: "notifications", label: "Notifications", icon: "bell", scope: "server", Component: Notifications,
+  { id: "notifications", icon: "bell", scope: "server", Component: Notifications,
     keywords: ["Notifications on this device", "Notify me when", "Devices"] },
-  { id: "hosts", label: "Hosts", icon: "server", scope: "server", Component: Hosts,
+  { id: "hosts", icon: "server", scope: "server", Component: Hosts,
     keywords: ["Pair a host", "Shared with you", "Trust with my account", "Host sharing", "Host configuration", "Command time limit", "Sessions on the host", "Compaction",
       "Host admins", "Host command access", "Host models", "Host extensions", "Revoke host"] },
-  { id: "workspaces", label: "Workspaces", icon: "users", scope: "server", Component: Workspaces, keywords: ["New workspace", "Deleted workspaces"] },
-  { id: "mcp-sharing", label: "MCP sharing", icon: "sparkles", scope: "server", keywords: ["Share remote MCP servers", "MCP connections"], Component: McpSharing },
-  { id: "admin", label: "Administration", icon: "shield", scope: "server", admin: true, Component: Administration,
+  { id: "workspaces", icon: "users", scope: "server", Component: Workspaces, keywords: ["New workspace", "Deleted workspaces"] },
+  { id: "mcp-sharing", icon: "sparkles", scope: "server", keywords: ["Share remote MCP servers", "MCP connections"], Component: McpSharing },
+  { id: "admin", icon: "shield", scope: "server", admin: true, Component: Administration,
     keywords: ["Server overview", "Accounts", "Every workspace", "Every host"] },
-  { id: "desktop", label: "Local hosts", icon: "monitor", scope: "device", desktop: true, Component: ThisComputer,
+  { id: "desktop", icon: "monitor", scope: "device", desktop: true, Component: ThisComputer,
     keywords: [computerTitle, "Add a host", "Pair this computer", "Sandbox", "WSL", "Models offered", "Sign Pi in to a provider", "Pikibun's command", "Command updates"] },
-  { id: "self-host", label: "Self host", icon: "database", scope: "device", desktop: true, Component: SelfHost,
+  { id: "self-host", icon: "database", scope: "device", desktop: true, Component: SelfHost,
     keywords: [`Pikibun on ${computerName}`, "Start Pikibun", "Stop Pikibun"] },
-  { id: "appearance", label: "Appearance", icon: "palette", scope: "device", Component: Appearance, keywords: ["Theme", "Color theme", "Dark mode", "Light mode"] },
+  { id: "appearance", icon: "palette", scope: "device", Component: Appearance,
+    keywords: ["Theme", "Color theme", "Dark mode", "Light mode", "Language", "Display language"] },
 ];
 
+export const settingsSections: readonly SettingsSection[] = sectionList.map(section => ({ ...section, get label() { return t(`settings.section.${section.id}`); } }));
+
 export const scopes: readonly SettingsScope[] = ["server", "device"];
-export const deviceTitle = hostsHere ? computerTitle : "This device";
+export const deviceTitle = (): string => (hostsHere ? computerTitle : t("settings.this_device"));
 
 export function scopeTitle(scope: SettingsScope): string {
-  return scope === "device" ? deviceTitle : displayOrigin(session().origin);
+  return scope === "device" ? deviceTitle() : displayOrigin(session().origin);
 }
 
 export function visibleSections(shown?: string): SettingsSection[] {
@@ -121,7 +125,7 @@ function ResultLeading(props: { result: SettingsResult }) {
 function ServerVersion() {
   return (
     <If when={serverVersion()}>
-      {version => <Text testID="settings-server-version" style={{ paddingTop: 16, paddingHorizontal: 12, fontSize: text.caption, color: palette().faint }}>{`Pikibun server ${version()}`}</Text>}
+      {version => <Text testID="settings-server-version" style={{ paddingTop: 16, paddingHorizontal: 12, fontSize: text.caption, color: palette().faint }}>{t("settings.server_version", { version: version() })}</Text>}
     </If>
   );
 }
@@ -137,7 +141,7 @@ export function SectionList(props: { onOpen: (target: SettingsTarget) => void })
   return (
     <Scroll style={{ flex: 1 }} contentStyle={{ paddingBottom: 24 }}>
       <View testID="settings-sections" style={{ gap: 24, padding: 16 }}>
-        <SearchField value={search.query()} onChange={value => search.query.set(value)} placeholder="Search settings" testID="settings-search" onSubmit={openFirst} />
+        <SearchField value={search.query()} onChange={value => search.query.set(value)} placeholder={t("settings.search")} testID="settings-search" onSubmit={openFirst} />
         <If when={search.searching()}
           else={
             <Each of={groups()} key={group => group.scope}>
@@ -158,7 +162,7 @@ export function SectionList(props: { onOpen: (target: SettingsTarget) => void })
             </Each>
           }>
           <If when={search.results().length}
-            else={<Text testID="settings-search-empty" style={{ paddingHorizontal: 4, fontSize: text.small, color: palette().muted }}>No setting matches</Text>}>
+            else={<Text testID="settings-search-empty" style={{ paddingHorizontal: 4, fontSize: text.small, color: palette().muted }}>{t("settings.no_match")}</Text>}>
             {card(
               <Each of={search.results()} key={result => result.key}>
                 {result => (
@@ -204,10 +208,10 @@ export function SettingsSidebar(props: { section: string; id?: string; onOpen: (
   return (
     <View testID="settings-sidebar" style={{ width: layout.sidebar, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
       <View desktop={{ windowDrag: true }} style={{ gap: 2, paddingTop: 12, paddingHorizontal: 8, paddingBottom: 4 }}>
-        <NavItem testID="settings-back" icon="arrow-left" label="Back to app" onPress={props.onBack} />
+        <NavItem testID="settings-back" icon="arrow-left" label={t("settings.back_to_app")} onPress={props.onBack} />
       </View>
       <View style={{ paddingHorizontal: 8, paddingTop: 4, paddingBottom: 4 }}>
-        <SearchField compact value={search.query()} onChange={value => search.query.set(value)} placeholder="Search settings" testID="settings-search" onSubmit={openFirst} />
+        <SearchField compact value={search.query()} onChange={value => search.query.set(value)} placeholder={t("settings.search")} testID="settings-search" onSubmit={openFirst} />
       </View>
       <Scroll style={{ flex: 1 }} contentStyle={{ paddingHorizontal: 8, paddingBottom: 16 }}>
         <If when={search.searching()}
@@ -243,7 +247,7 @@ export function SettingsSidebar(props: { section: string; id?: string; onOpen: (
           }>
           <View testID="settings-results" style={{ gap: 2, paddingTop: 8 }}>
             <If when={search.results().length}
-              else={<Text testID="settings-search-empty" style={{ padding: 8, fontSize: text.small, color: palette().muted }}>No setting matches</Text>}>
+              else={<Text testID="settings-search-empty" style={{ padding: 8, fontSize: text.small, color: palette().muted }}>{t("settings.no_match")}</Text>}>
               <Each of={search.results()} key={result => result.key}>
                 {result => <ResultItem result={result()} active={sameTarget(result(), props.section, props.id)} onPress={() => props.onOpen(result().target)} />}
               </Each>
