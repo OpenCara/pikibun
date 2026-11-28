@@ -319,6 +319,15 @@ describe("on a phone", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/submit`).options?.access).toBeUndefined();
   });
 
+  test("the session list's header opens every session, the commands and a new session, and no longer Open by ID, which the commands have", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.waitFor("id:session-row-s1");
+    for (const id of ["all-sessions", "open-commands", "new-session"]) expect(app.shows(`id:${id}`)).toBe(true);
+    expect(app.shows("id:open-by-id")).toBe(false);
+    await app.press("id:all-sessions");
+    await app.waitFor("id:sessions-row-s1");
+  });
+
   test("starts a new session with a first message", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn });
     await app.waitFor("id:new-session");
@@ -394,20 +403,59 @@ describe("on a desktop", () => {
     expect(app.value("id:new-message")).toBe("");
   });
 
-  test("settings switch sections in place beside their list, and Back leaves them for the session", async () => {
+  test("settings take the sidebar's place, switch sections in place under the section's title, and Back to app leaves them for the session", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1200, height: 800 });
     await app.press("id:session-row-s1");
     await app.waitFor("id:composer-input");
     await app.press("id:open-settings");
-    await app.waitFor("id:settings-sections");
+    await app.waitFor("id:settings-sidebar");
+    expect(app.shows("id:sidebar")).toBe(false);
+    expect(app.shows("id:header-back")).toBe(false);
     await app.press("id:settings-section-appearance");
     await app.waitFor("id:appearance-scheme");
+    expect(app.texts()).toContain("Appearance");
+    expect(app.texts()).toContain("This Mac");
     await app.press("id:settings-section-profile");
     await app.waitFor("id:sign-out");
-    await app.press("id:header-back");
+    await app.press("id:settings-back");
     await app.waitFor("id:sidebar");
     await app.waitUntil(() => !app.shows("id:settings-sections"));
     expect(app.shows("text:Why does the login test fail on CI?")).toBe(true);
+  });
+
+  test("the sidebar lists only the sessions: New session, All sessions and Commands are in the main pane's toolbar, on the home and over a session", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1200, height: 800 });
+    await app.waitFor("id:home-toolbar");
+    for (const id of ["new-session", "all-sessions", "open-commands"]) expect(app.count(`id:${id}`)).toBe(1);
+    expect(app.shows("id:open-by-id")).toBe(false);
+    for (const label of ["Sessions", "Open by ID", "Commands"]) expect(app.texts()).not.toContain(label);
+    expect(app.shows("id:session-search")).toBe(true);
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:session-header");
+    expect(app.shows("id:home-toolbar")).toBe(false);
+    expect(app.shows("id:main-toolbar")).toBe(true);
+    expect(app.shows("id:session-commands")).toBe(false);
+    await app.press("id:open-commands");
+    await app.waitFor("id:command-palette");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:command-palette", { state: "gone" });
+    await app.press("id:all-sessions");
+    await app.waitFor("id:sessions-screen");
+    await app.press("id:header-back");
+    await app.waitFor("id:session-header");
+    await app.press("id:new-session");
+    await app.waitFor("text:What should we work on?");
+    await app.waitFor("id:home-toolbar");
+  });
+
+  test("Ctrl/⌘ Shift O starts a new session, and Ctrl/⌘ , opens the settings", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1200, height: 800 });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:composer-input");
+    await app.keyboard.press("mod+shift+o");
+    await app.waitFor("text:What should we work on?");
+    await app.keyboard.press("mod+,");
+    await app.waitFor("id:settings-sidebar");
   });
 
   test("keeps its layout through an appearance change", async () => {

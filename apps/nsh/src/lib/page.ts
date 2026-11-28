@@ -30,6 +30,19 @@ export function parseRoute(hash: string): PageRoute {
   return { name: "home" };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function sessionIdIn(text: string): string | null {
+  const value = text.trim();
+  if (!value || /\s/.test(value)) return null;
+  const hash = value.indexOf("#/");
+  if (hash >= 0) {
+    const route = parseRoute(value.slice(hash));
+    return route.name === "session" ? route.sessionId : null;
+  }
+  return UUID.test(value) ? value : null;
+}
+
 export function routeHash(route: PageRoute): string {
   switch (route.name) {
     case "home": return "#/";

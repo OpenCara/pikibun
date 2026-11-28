@@ -1,5 +1,5 @@
 import { cleanup, computed, createAnimatedValue, List, signal, Text, untracked, View, type AnimatedValue, type PanEvent, type ViewRef } from "nsh";
-import { Button as BaseButton, Input } from "nsh/base";
+import { Button as BaseButton } from "nsh/base";
 import { writeClipboard } from "../lib/clipboard";
 import { canCreateSessions, errorMessage, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord, type SideAskSummary } from "../shared";
 import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../components/PullRequest";
@@ -11,7 +11,9 @@ import { session } from "../lib/auth";
 import { type Action } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
-import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
+import {
+  Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, SearchField, StatusDot, SwipeRow, swipesRows, type MenuAction,
+} from "../ui";
 
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; archived: number; showArchived: boolean; canCreate: boolean }
@@ -170,13 +172,8 @@ export function SessionList(props: {
         contentStyle={{ paddingBottom: 16 }} onScrollDragStart={() => { if (untracked(swiped)) swiped.set(null); }}
         header={() => (
           <View style={{ gap: 8, paddingHorizontal: inset(), paddingTop: 4, paddingBottom: 8 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, borderRadius: radius.medium, paddingHorizontal: 10, height: props.compact ? 32 : 40,
-              backgroundColor: palette().surface, borderWidth: 1, borderColor: palette().border }}>
-              <Icon name="search" size={14} color={palette().muted} />
-              <Input value={query()} onChange={event => query.set(event.value)} placeholder="Search sessions" accessibilityLabel="Search sessions by title or owner" autoCorrect={false}
-                autoCapitalize="none" testID="session-search"
-                style={{ flex: 1, fontSize: props.compact ? text.body : text.large, color: palette().text, placeholderColor: palette().muted }} />
-            </View>
+            <SearchField compact={props.compact} value={query()} onChange={value => query.set(value)} placeholder="Search sessions"
+              label="Search sessions by title or owner" testID="session-search" />
             <If when={data.sessionsError()}>
               <Banner tone="danger" title="Could not load sessions" actions={<Button small variant="outline" label="Try again" onPress={data.refreshSessions} />}>{data.sessionsError()}</Banner>
             </If>

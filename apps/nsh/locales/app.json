@@ -4,9 +4,8 @@
   "nav.new_session": { "en": "New session", "zh": "新建会话", "zh-Hant": "新增工作階段", "ja": "新しいセッション", "ko": "새 세션" },
   "nav.sessions": { "en": "Sessions", "zh": "会话", "zh-Hant": "工作階段", "ja": "セッション", "ko": "세션" },
   "nav.all_sessions": { "en": "All sessions", "zh": "所有会话", "zh-Hant": "所有工作階段", "ja": "すべてのセッション", "ko": "모든 세션" },
-  "nav.open_by_id": { "en": "Open by ID", "zh": "按 ID 打开", "zh-Hant": "依 ID 開啟", "ja": "ID で開く", "ko": "ID로 열기" },
   "nav.open_session": { "en": "Open a session", "zh": "打开会话", "zh-Hant": "開啟工作階段", "ja": "セッションを開く", "ko": "세션 열기" },
-  "nav.open_session_by_id": { "en": "Open a session by ID", "zh": "按 ID 打开会话", "zh-Hant": "依 ID 開啟工作階段", "ja": "ID でセッションを開く", "ko": "ID로 세션 열기" },
+  "nav.open_session_by_id": { "en": "Open a session by ID…", "zh": "按 ID 打开会话…", "zh-Hant": "依 ID 開啟工作階段…", "ja": "ID でセッションを開く…", "ko": "ID로 세션 열기…" },
   "nav.commands": { "en": "Commands", "zh": "命令", "zh-Hant": "命令", "ja": "コマンド", "ko": "명령" },
   "nav.settings": { "en": "Settings", "zh": "设置", "zh-Hant": "設定", "ja": "設定", "ko": "설정" },
   "nav.join_workspace": { "en": "Join a workspace", "zh": "加入工作区", "zh-Hant": "加入工作區", "ja": "ワークスペースに参加", "ko": "워크스페이스 참가" },
@@ -41,6 +40,14 @@
   "commands.no_workspaces": { "en": "No workspaces yet", "zh": "还没有工作区", "zh-Hant": "尚無工作區", "ja": "ワークスペースはまだありません", "ko": "아직 워크스페이스가 없습니다" },
   "commands.all_workspaces": { "en": "All workspaces", "zh": "所有工作区", "zh-Hant": "所有工作區", "ja": "すべてのワークスペース", "ko": "모든 워크스페이스" },
   "commands.new_workspace": { "en": "New workspace", "zh": "新建工作区", "zh-Hant": "新增工作區", "ja": "新しいワークスペース", "ko": "새 워크스페이스" },
+  "commands.paste_session_id": {
+    "en": "Paste a session's ID or link",
+    "zh": "粘贴会话的 ID 或链接",
+    "zh-Hant": "貼上工作階段的 ID 或連結",
+    "ja": "セッションの ID またはリンクを貼り付け",
+    "ko": "세션 ID 또는 링크 붙여넣기"
+  },
+  "commands.open_session_named": { "en": "Open session “%{id}”", "zh": "打开会话“%{id}”", "zh-Hant": "開啟工作階段「%{id}」", "ja": "セッション「%{id}」を開く", "ko": "세션 “%{id}” 열기" },
 
   "settings.section.profile": { "en": "Profile", "zh": "个人资料", "zh-Hant": "個人資料", "ja": "プロフィール", "ko": "프로필" },
   "settings.section.password": { "en": "Password", "zh": "密码", "zh-Hant": "密碼", "ja": "パスワード", "ko": "비밀번호" },
@@ -53,6 +60,9 @@
   "settings.section.self-host": { "en": "Self host", "zh": "自托管", "zh-Hant": "自行託管", "ja": "セルフホスト", "ko": "셀프 호스팅" },
   "settings.section.appearance": { "en": "Appearance", "zh": "外观", "zh-Hant": "外觀", "ja": "外観", "ko": "모양" },
   "settings.this_device": { "en": "This device", "zh": "此设备", "zh-Hant": "此裝置", "ja": "このデバイス", "ko": "이 기기" },
+  "settings.back_to_app": { "en": "Back to app", "zh": "返回应用", "zh-Hant": "返回應用程式", "ja": "アプリに戻る", "ko": "앱으로 돌아가기" },
+  "settings.search": { "en": "Search settings", "zh": "搜索设置", "zh-Hant": "搜尋設定", "ja": "設定を検索", "ko": "설정 검색" },
+  "settings.no_match": { "en": "No setting matches", "zh": "没有匹配的设置", "zh-Hant": "沒有符合的設定", "ja": "一致する設定はありません", "ko": "일치하는 설정이 없습니다" },
   "settings.server_version": { "en": "Pikibun server %{version}", "zh": "Pikibun 服务器 %{version}", "zh-Hant": "Pikibun 伺服器 %{version}", "ja": "Pikibun サーバー %{version}", "ko": "Pikibun 서버 %{version}" },
 
   "appearance.theme": { "en": "Theme", "zh": "主题", "zh-Hant": "主題", "ja": "テーマ", "ko": "테마" },

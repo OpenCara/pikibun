@@ -248,7 +248,7 @@ try {
   await page.clickUntil("Appearance", "System follows");
   await waitForAddress("#/settings/appearance");
   await new Promise(done => setTimeout(done, 600));
-  await page.click("Back");
+  await page.click("Back to app");
   await waitForAddress("#/");
   await new Promise(done => setTimeout(done, 1000));
   if ((await page.text()).includes("System follows") || await page.evaluate<string>("location.hash") !== "#/") {
@@ -265,6 +265,10 @@ try {
   await new Promise(done => setTimeout(done, 1000));
   if (await page.evaluate<string>("location.hash") !== "#/s/smoke-first") throw new Error("Back from a typed session address didn't stay on the one before.");
   console.log("✓ Back goes to the session address typed before");
+  await page.evaluate("location.hash = '#/'");
+  await page.waitForText("What should we work on?");
+  await waitForAddress("#/");
+  console.log("✓ the home's address, from a session's, shows the home");
 
   await page.goto(`${origin}/#/settings/profile`);
   await page.waitForText("Ada Lovelace");
