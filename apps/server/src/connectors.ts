@@ -34,6 +34,10 @@ import { reportSessionBranches } from './session-branches.js';
 import { reportSessionTunnel } from './session-tunnels.js';
 import { notifySessionActivityQuietly } from './notifications.js';
 
+const renameBody = z.strictObject({
+  name: z.string().trim().min(1).max(120).refine(value => !/[\x00-\x1f\x7f]/.test(value)),
+});
+
 function onlyFields(value: Record<string, unknown>, fields: string[]): void {
   if (Object.keys(value).some(key => !fields.includes(key))) fail(400, 'invalid_metadata', 'Only model and capability metadata is accepted.');
 }
@@ -441,10 +445,7 @@ export function registerConnectors(app: Hono<AppEnv>): void {
   });
   app.patch('/api/connectors/:id', async c => {
     const row = await ownedConnector(c);
-    const input = await jsonObject(c, 4096);
-    if (Object.keys(input).some(key => key !== 'name')) fail(400, 'invalid_input', 'Only a host\'s name can be changed here.');
-    const name = text(input.name, 'name', 120).trim();
-    if (!name || /[\x00-\x1f\x7f]/.test(name)) fail(400, 'invalid_input', 'Invalid name.');
+    const { name } = await body(c, renameBody, { maxBytes: 4096, message: 'A host\'s name is 1 to 120 characters, without control characters, and nothing else changes here.' });
     await c.env.DB.query('UPDATE connectors SET name = ? WHERE id = ? AND removed_at IS NULL').bind(name, row.id).run();
     return c.json({ connector: await connectorInfo(c.env, { ...row, name }) });
   });
