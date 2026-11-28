@@ -2,9 +2,10 @@ import { computed, effect, keymap, List, platform, signal, Text, untracked, View
 import { Button as BaseButton, Dialog, Input, Sheet } from "nsh/base";
 import { firstEnabled, matching, nextEnabled, paletteRows, type PaletteSession } from "../shared";
 import type { AppCommand, CommandChoice, CommandRegistry } from "../lib/commands";
+import { sessionIdIn } from "../lib/page";
 import { Icon, type IconName } from "../icons";
 import { control, palette, radius, text, weight } from "../theme";
-import { IconButton, phoneWidth } from "../ui";
+import { IconButton, phoneWidth, shortcutLabel } from "../ui";
 
 interface PaletteRowView {
   key: string;
@@ -20,18 +21,9 @@ interface PaletteRowView {
   act: () => void;
 }
 
-const bindingLabel = (binding: string | undefined) => {
-  if (!binding || !platform.desktop) return undefined;
-  try {
-    return keymap.label(binding);
-  } catch {
-    return undefined;
-  }
-};
-
 const choiceText = (choice: CommandChoice) => [choice.label, choice.hint ?? "", ...(choice.keywords ?? [])].join(" ");
 
-export function CommandPalette(props: { registry: CommandRegistry; sessions: () => PaletteSession[]; openSession: (id: string) => void }) {
+export function CommandPalette(props: { registry: CommandRegistry; sessions: () => PaletteSession[]; openSession: (id: string) => void; openById?: (id: string) => void }) {
   const open = () => props.registry.request() !== null;
   const asking = signal<string | null>(null);
   const query = signal("");
@@ -83,7 +75,7 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
     return {
       key: `command:${command.id}`, title: command.title, hint: command.disabled ?? command.hint, icon: command.icon, disabled: command.disabled,
       heading: !typing && previous?.group !== command.group ? command.group : undefined, group: typing ? command.group : undefined,
-      binding: bindingLabel(command.binding), testID: command.testID ?? `palette-command-${command.id}`, act: () => start(command),
+      binding: shortcutLabel(command.binding), testID: command.testID ?? `palette-command-${command.id}`, act: () => start(command),
     };
   }
   const sessionRow = (session: PaletteSession, first: boolean): PaletteRowView => ({
@@ -99,11 +91,16 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
     if (!ask) {
       const typing = typed.trim() !== "";
       const found = paletteRows(typed, commands(), typing ? props.sessions() : []);
-      return found.map((row, index) => {
+      const pasted = props.openById ? sessionIdIn(typed) : null;
+      const byId: PaletteRowView[] = pasted ? [{
+        key: `open-id:${pasted}`, title: `Open session ${pasted}`, hint: "The session this ID or link names", icon: "hash", heading: "Open by ID",
+        testID: "palette-open-id", act: () => { close(); props.openById!(pasted); },
+      }] : [];
+      return [...byId, ...found.map((row, index) => {
         const before = found[index - 1];
         if (row.kind === "session") return sessionRow(row.session, before?.kind !== "session");
         return commandRow(row.command, typing, before?.kind === "command" ? before.command : undefined);
-      });
+      })];
     }
     if (ask.kind === "choice") {
       return matching(typed, ask.choices(), choiceText).map(choice => ({

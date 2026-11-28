@@ -55,8 +55,9 @@ describe("the command palette", () => {
     await app.waitFor("id:palette-input");
     await app.type("id:palette-input", "dark");
     await app.waitFor("id:palette-session-s3");
+    expect(app.shows("id:palette-command-settings-appearance")).toBe(true);
     expect(app.shows("id:palette-command-session-rename")).toBe(false);
-    await app.submit("id:palette-input");
+    await app.press("id:palette-session-s3");
     await app.waitFor("id:command-palette", { state: "gone" });
     await app.waitUntil(() => app.texts().includes("Add a dark mode"));
     await app.waitFor("id:chat-model");
@@ -179,7 +180,7 @@ describe("the command palette", () => {
 
   test("without a session open, only the global commands are offered, and a settings section opens", async () => {
     const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server(threeSessions) });
-    await app.waitFor("id:sidebar");
+    await app.waitFor("id:home-toolbar");
     await app.press("id:open-commands");
     await app.waitFor("id:palette-command-new-session");
     expect(app.shows("id:palette-command-session-rename")).toBe(false);
@@ -187,6 +188,33 @@ describe("the command palette", () => {
     await app.waitFor("id:palette-command-settings-appearance");
     await app.submit("id:palette-input");
     await app.waitFor("id:settings-sections");
+  });
+
+  test("a session's link or ID pasted into it opens that session, and Open a session by ID… asks for one, checking access first where the list hasn't it", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server() });
+    await app.waitFor("id:session-row-s1");
+    await app.keyboard.press("mod+k");
+    await app.waitFor("id:palette-input");
+    await app.type("id:palette-input", `${ORIGIN}/#/s/s3`);
+    await app.waitFor("id:palette-open-id");
+    expect(app.texts()).toContain("Open session s3");
+    await app.press("id:palette-open-id");
+    await app.waitFor("id:command-palette", { state: "gone" });
+    await app.waitUntil(() => app.texts().includes("Add a dark mode"));
+    expect(sent(app, "GET", "/api/sessions/s3").length).toBeGreaterThan(0);
+
+    await app.keyboard.press("mod+k");
+    await app.waitFor("id:palette-input");
+    await app.type("id:palette-input", "by id");
+    await app.waitFor("id:palette-command-open-by-id");
+    await app.press("id:palette-command-open-by-id");
+    await app.waitFor("text:Paste a session's ID or link");
+    await app.type("id:palette-input", "nope");
+    await app.waitFor("text:Open session “nope”");
+    await app.submit("id:palette-input");
+    await app.waitFor("id:open-session-submit");
+    await app.waitUntil(() => app.value("id:open-session-id") === "nope");
+    await app.waitUntil(() => sent(app, "GET", "/api/sessions/nope").length > 0);
   });
 
   test("a collaborator who doesn't manage the session isn't offered Rename… or Archive", async () => {

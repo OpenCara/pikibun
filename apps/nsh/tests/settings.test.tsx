@@ -323,6 +323,49 @@ describe("settings", () => {
     expect(app.shows("id:settings-section-password")).toBe(false);
   });
 
+  test("Search finds a setting by its name, in a section or on each workspace's tabs, and opens where it is", async () => {
+    const app = await openSettings("appearance");
+    await app.waitFor("id:appearance-scheme");
+    await app.type("id:settings-search", "sign out");
+    await app.waitFor("id:settings-result-setting-profile-sign-out");
+    expect(app.shows("id:settings-sections")).toBe(false);
+    await app.press("id:settings-result-setting-profile-sign-out");
+    await app.waitFor("id:sign-out");
+    await app.clear("id:settings-search");
+    await app.type("id:settings-search", "tool groups");
+    await app.waitFor("id:settings-result-workspace-setting-w1-tool-groups");
+    expect(app.texts()).toContain("Analytical Engine · Agents");
+    await app.submit("id:settings-search");
+    await app.waitFor("id:workspace-tab-agents");
+    await app.clear("id:settings-search");
+    await app.type("id:settings-search", "no such thing");
+    await app.waitFor("id:settings-search-empty");
+    await app.press("id:settings-search-clear");
+    await app.waitFor("id:settings-sections");
+    expect(app.value("id:settings-search")).toBe("");
+  });
+
+  test("each workspace is one step away under Workspaces in the settings' sidebar, named over its page", async () => {
+    const app = await openSettings("profile");
+    await app.waitFor("id:settings-workspace-w1");
+    await app.press("id:settings-workspace-w1");
+    await app.waitFor("id:workspace-tab-overview");
+    expect(app.texts().filter(item => item === "Analytical Engine").length).toBeGreaterThan(1);
+    await app.press("id:settings-section-workspaces");
+    await app.waitFor("id:workspace-w1");
+  });
+
+  test("on a phone, Settings searches too, and the result opens its page", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.press("id:open-settings");
+    await app.waitFor("id:settings-search");
+    await app.type("id:settings-search", "dark");
+    await app.waitFor("id:settings-result-setting-appearance-dark-mode");
+    expect(app.shows("id:settings-section-profile")).toBe(false);
+    await app.press("id:settings-result-setting-appearance-dark-mode");
+    await app.waitFor("id:appearance-scheme");
+  });
+
   test("Notifications saves what to be told about", async () => {
     const app = await openSettings("notifications");
     await app.waitFor("id:notify-finished");
@@ -364,7 +407,7 @@ describe("settings", () => {
     expect(notificationRoute("n2 #/settings/notifications")).toEqual({ name: "settings", section: "notifications" });
     expect(notificationRoute("n3")).toBe(null);
 
-    await app.press("id:header-back");
+    await app.press("id:settings-back");
     await app.waitUntil(() => !app.shows("id:settings-sections"));
     await app.press("id:session-row-s1");
     await app.waitFor("id:composer-input");

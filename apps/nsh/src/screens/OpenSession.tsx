@@ -6,8 +6,8 @@ import { createAction } from "../lib/resource";
 import { palette } from "../theme";
 import { Button, Feedback, Small } from "../ui";
 
-export function OpenSession(props: { onOpen: (id: string) => void }) {
-  const sessionId = signal("");
+export function OpenSession(props: { onOpen: (id: string) => void; initial?: string }) {
+  const sessionId = signal(props.initial ?? "");
   const action = createAction();
   function open() {
     const id = sessionId().trim();
@@ -17,10 +17,11 @@ export function OpenSession(props: { onOpen: (id: string) => void }) {
       props.onOpen(result.session.id);
     });
   }
+  if (props.initial?.trim()) open();
   return (
     <Scroll style={{ flex: 1 }} contentStyle={{ gap: 12, padding: 20, width: "100%", maxWidth: 560, alignSelf: "center" }}>
       <Small>Session ID — ask the session owner for its ID</Small>
-      <Input testID="open-session-id" value={sessionId()} onChange={event => sessionId.set(event.value)} autoFocus autoCapitalize="none" autoCorrect={false}
+      <Input testID="open-session-id" value={sessionId()} onChange={event => sessionId.set(event.value)} autoFocus={!props.initial} autoCapitalize="none" autoCorrect={false}
         returnKeyType="go" onSubmit={open} accessibilityLabel="Session ID"
         style={{ borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, backgroundColor: palette().surface, borderColor: palette().border, color: palette().text }} />
       <Feedback error={action.error()} />

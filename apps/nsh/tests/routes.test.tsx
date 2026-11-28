@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { parseRoute, routeHash } from "../src/lib/page";
+import { parseRoute, routeHash, sessionIdIn } from "../src/lib/page";
 import { ORIGIN, server, signedIn } from "./fixtures";
 
 describe("the web app's addresses", () => {
@@ -18,6 +18,15 @@ describe("the web app's addresses", () => {
       expect(parseRoute(routeHash(route))).toEqual(route);
     }
     expect(routeHash({ name: "home" })).toBe("#/");
+  });
+
+  test("a session's ID, or a link to it, names the session; any other text doesn't", () => {
+    const id = "3f2b8c1e-9d4a-4c5e-8f00-12ab34cd56ef";
+    expect(sessionIdIn(id)).toBe(id);
+    expect(sessionIdIn(`  ${id}\n`)).toBe(id);
+    expect(sessionIdIn(`https://pikibun.com/#/s/${id}`)).toBe(id);
+    expect(sessionIdIn("#/s/a%20b")).toBe("a b");
+    for (const other of ["", "rename", "s1", `open ${id}`, "https://pikibun.com/#/settings/hosts", "https://pikibun.com/"]) expect(sessionIdIn(other)).toBe(null);
   });
 });
 

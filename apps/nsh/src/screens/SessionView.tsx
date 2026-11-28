@@ -38,7 +38,9 @@ import { createSessionActions } from "../lib/session-actions";
 
 const releaseChatBox = platform.desktop ? () => Keyboard.dismiss() : undefined;
 
-export function SessionView(props: { id: string; page: boolean; front?: () => boolean; openSession: (id: string) => void; onBack?: () => void; go: (route: PageRoute) => void }) {
+export function SessionView(props: {
+  id: string; page: boolean; front?: () => boolean; openSession: (id: string) => void; onBack?: () => void; go: (route: PageRoute) => void; toolbar?: JSX.Element;
+}) {
   const { user } = untracked(session);
   const data = useAppData();
   const commands = CommandsContext();
@@ -206,8 +208,8 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
       <If when={live.session() ? pullRequest() : undefined}>
         {pull => <View style={{ paddingRight: 4 }}><PullRequestLink pull={pull()} compact={props.page} /></View>}
       </If>
-      <If when={commands}>
-        {registry => <IconButton testID="session-commands" icon="command" label="Commands" onPress={() => registry().open()} />}
+      <If when={!props.toolbar ? commands : null}>
+        {registry => <IconButton testID="session-commands" icon="command" label="Commands" shortcut="mod+k" onPress={() => registry().open()} />}
       </If>
       <DropdownMenu label="Session actions" testID="session-actions" items={menu()} />
       <IconButton testID="session-details" icon="panel-right" label="Session details" onPress={() => openPanel(panelTab())} active={panelOpen()} />
@@ -264,7 +266,7 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
     <PeopleContext.Provider value={people}>
       <View style={{ flex: 1, backgroundColor: palette().background }}>
         <If when={!props.page}>
-          <PageHeader title={title()} subtitle={subtitle()} actions={headerActions()} testID="session-header" />
+          <PageHeader title={title()} subtitle={subtitle()} leading={props.toolbar} actions={headerActions()} testID="session-header" />
         </If>
         <If when={props.page && live.session()}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: 1, borderColor: palette().border }}>
